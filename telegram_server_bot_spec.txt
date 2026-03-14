@@ -1,0 +1,202 @@
+TELEGRAM SERVER MANAGEMENT BOT - TECHNICAL SPECIFICATION
+
+1. OVERVIEW
+
+This document specifies the requirements and architecture for a Telegram
+bot that allows authorized users to monitor and manage server
+applications. The bot will run on Node.js and use the Telegraf framework
+to interact with the Telegram Bot API.
+
+The primary goal is to allow safe execution of predefined system
+commands from Telegram for tasks such as:
+
+-   Checking server status
+-   Listing running applications
+-   Deploying updated code from Git
+-   Restarting services
+-   Viewing logs
+
+The system must enforce strong security rules to prevent arbitrary
+command execution.
+
+2. TECHNOLOGY STACK
+
+Backend: - Node.js (version 20 or later) - Typescript - Telegraf
+(Telegram bot framework) - child_process module for command execution
+
+Database: - SQLite (default) or PostgreSQL
+
+Process Management: - PM2
+
+Deployment: - Docker
+
+3. HIGH LEVEL ARCHITECTURE
+
+Telegram Client | | Telegram Bot API | | Node.js Bot (Telegraf) | |
+Command Handler Layer | +– Authentication Guard +– Command Parser +–
+Permission Validator +– Command Executor | | System Command Runner | |
+Linux Server
+
+4. PROJECT STRUCTURE
+
+server-bot/ │ ├── src/ │ ├── bot/ │ │ bot.ts │ │ commands.ts │ │ │ ├──
+auth/ │ │ authGuard.ts │ │ │ ├── executor/ │ │ commandExecutor.ts │ │ │
+├── services/ │ │ systemService.ts │ │ deployService.ts │ │ │ ├── db/ │
+│ db.ts │ │ schema.sql │ │ │ ├── config/ │ │ config.ts │ │ │ └──
+index.ts │ ├── dockerfile ├── package.json └── README.md
+
+5. TELEGRAM COMMANDS
+
+/status Return system status information including:
+
+-   CPU usage
+-   RAM usage
+-   Disk usage
+-   Server uptime
+
+Example commands executed:
+
+uptime free -m df -h
+
+/process List running processes or services.
+
+Examples:
+
+pm2 list docker ps ps aux
+
+/apps List applications managed by the system.
+
+/deploy
+
+Deploy an application by performing:
+
+1.  Navigate to application directory
+2.  Pull latest code from Git
+3.  Install dependencies
+4.  Build project
+5.  Restart service
+
+Example flow:
+
+git pull origin main npm install npm run build pm2 restart
+
+/logs
+
+Return the latest logs for the application.
+
+Example:
+
+pm2 logs –lines 50
+
+6. SECURITY REQUIREMENTS
+
+The bot MUST NOT allow arbitrary shell execution.
+
+Only predefined commands stored in the database can be executed.
+
+Security controls:
+
+1.  Telegram user whitelist
+
+2.  Role based access control
+
+3.  Command whitelist
+
+4.  Command execution timeout
+
+5.  Input sanitization
+
+6.  Bot runs under non-root user
+
+7.  DATABASE DESIGN
+
+TABLE: telegram_users
+
+id telegram_id username role created_at
+
+Roles:
+
+admin viewer
+
+TABLE: commands
+
+id name description script allowed_roles created_at
+
+TABLE: apps
+
+id name path start_command build_command deploy_branch created_at
+
+TABLE: command_logs
+
+id telegram_user_id command output status created_at
+
+8. COMMAND EXECUTION FLOW
+
+1.  Telegram user sends command.
+
+2.  Bot receives message.
+
+3.  Bot verifies telegram_id exists in database.
+
+4.  Bot verifies user role.
+
+5.  Bot loads command definition.
+
+6.  Bot executes associated script.
+
+7.  Output is returned to Telegram.
+
+8.  Command execution is logged.
+
+9.  NODEJS EXECUTION EXAMPLE
+
+Example using child_process:
+
+const { exec } = require(“child_process”)
+
+exec(“pm2 list”, (error, stdout, stderr) => { if (error) {
+console.error(error) return } console.log(stdout) })
+
+10. SECURITY HARDENING
+
+Mandatory protections:
+
+-   Command whitelist
+-   Execution timeout (30 seconds)
+-   Input validation
+-   No root execution
+-   Logging for audit purposes
+
+11. LOGGING
+
+Every command execution must be logged with:
+
+-   telegram user
+-   command
+-   timestamp
+-   result
+-   success or failure
+
+12. OPTIONAL FEATURES
+
+Possible improvements:
+
+-   Interactive Telegram menu
+-   Inline keyboard actions
+-   Real-time log streaming
+-   Multi-server management
+-   SSH-based remote execution
+
+13. OUTPUT REQUIREMENTS
+
+The final implementation must include:
+
+-   Complete Node.js source code
+-   Database schema
+-   Dockerfile
+-   Deployment instructions
+-   README documentation
+
+All code must compile and run immediately after installation.
+
+END OF SPECIFICATION

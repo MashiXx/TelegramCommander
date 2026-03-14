@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  telegram-commander:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - bot-data:/app/data
+    # Allow access to host Docker socket for `docker ps` command
+    # Remove if not needed
+    volumes:
+      - bot-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  bot-data:
