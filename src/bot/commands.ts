@@ -7,7 +7,10 @@ import {
   Server,
 } from "../db/db";
 import { sshExec, truncateOutput } from "../executor/sshExecutor";
-import { getSystemStatus, getProcessList, getPm2Logs } from "../services/systemService";
+import {
+  getSystemStatus, getProcessList, getPm2Logs,
+  getSysOverview, getSysCpu, getSysMemory, getSysDisk, getSysNetwork, getSysAll,
+} from "../services/systemService";
 import { deployApp } from "../services/deployService";
 
 // ---------- helpers ----------
@@ -67,6 +70,7 @@ export function registerCommands(bot: Telegraf): void {
   bot.command("help", requireAuth(), async (ctx) => {
     const cmds = [
       "/status        — System status",
+      "/sysinfo       — System info menu (CPU/RAM/Disk/Network)",
       "/process       — Running processes",
       "/apps [server] — Managed applications",
       "/logs [lines]  — View PM2 logs",
@@ -120,6 +124,108 @@ export function registerCommands(bot: Telegraf): void {
       { parse_mode: "Markdown" }
     );
     logExecution(userId(ctx), "status", output, result.exitCode === 0 ? "success" : "failure", server.id);
+  }
+
+  // /sysinfo — inline menu: overview | cpu | memory | disk | network | all
+  bot.command("sysinfo", requireAuth(), async (ctx) => {
+    const server = await pickServer(ctx, "syspick", "sysinfo");
+    if (!server) return;
+    await ctx.reply(
+      `*${server.name}* — Chọn thông tin cần xem:`,
+      {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback("📋 Tổng quan", `sysinfo:overview:${server.name}`),
+            Markup.button.callback("🖥 CPU",        `sysinfo:cpu:${server.name}`),
+          ],
+          [
+            Markup.button.callback("💾 Bộ nhớ",    `sysinfo:memory:${server.name}`),
+            Markup.button.callback("💽 Ổ đĩa",     `sysinfo:disk:${server.name}`),
+          ],
+          [
+            Markup.button.callback("🌐 Mạng",      `sysinfo:network:${server.name}`),
+            Markup.button.callback("📊 Tất cả",    `sysinfo:all:${server.name}`),
+          ],
+        ]),
+      }
+    );
+  });
+
+  // server picker callback for sysinfo
+  bot.action(/^syspick:(.+)$/, requireAuth(), async (ctx) => {
+    const serverName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.split(":")[1];
+    const server = findServer(serverName);
+    if (!server) { await ctx.answerCbQuery("Server not found"); return; }
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      `*${server.name}* — Chọn thông tin cần xem:`,
+      {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback("📋 Tổng quan", `sysinfo:overview:${server.name}`),
+            Markup.button.callback("🖥 CPU",        `sysinfo:cpu:${server.name}`),
+          ],
+          [
+            Markup.button.callback("💾 Bộ nhớ",    `sysinfo:memory:${server.name}`),
+            Markup.button.callback("💽 Ổ đĩa",     `sysinfo:disk:${server.name}`),
+          ],
+          [
+            Markup.button.callback("🌐 Mạng",      `sysinfo:network:${server.name}`),
+            Markup.button.callback("📊 Tất cả",    `sysinfo:all:${server.name}`),
+          ],
+        ]),
+      }
+    );
+  });
+
+  // sysinfo section callbacks
+  bot.action(/^sysinfo:(overview|cpu|memory|disk|network|all):(.+)$/, requireAuth(), async (ctx) => {
+    const data = (ctx.callbackQuery as CallbackQuery.DataQuery).data;
+    const m = data.match(/^sysinfo:(overview|cpu|memory|disk|network|all):(.+)$/);
+    if (!m) { await ctx.answerCbQuery(); return; }
+    const [, section, serverName] = m;
+    const server = findServer(serverName);
+    if (!server) { await ctx.answerCbQuery("Server not found"); return; }
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
+    await runSysInfo(ctx, server, section as "overview" | "cpu" | "memory" | "disk" | "network" | "all");
+  });
+
+  const sysInfoLabels: Record<string, string> = {
+    overview: "📋 Tổng quan",
+    cpu:      "🖥 CPU",
+    memory:   "💾 Bộ nhớ",
+    disk:     "💽 Ổ đĩa",
+    network:  "🌐 Mạng",
+    all:      "📊 Tất cả",
+  };
+
+  const sysInfoFns: Record<string, (s: Server) => ReturnType<typeof getSysAll>> = {
+    overview: getSysOverview,
+    cpu:      getSysCpu,
+    memory:   getSysMemory,
+    disk:     getSysDisk,
+    network:  getSysNetwork,
+    all:      getSysAll,
+  };
+
+  async function runSysInfo(
+    ctx: Context,
+    server: Server,
+    section: "overview" | "cpu" | "memory" | "disk" | "network" | "all"
+  ): Promise<void> {
+    const label = sysInfoLabels[section];
+    const msg = await ctx.reply(`Đang lấy thông tin *${label}* từ *${server.name}*…`, { parse_mode: "Markdown" });
+    const result = await sysInfoFns[section](server);
+    const output = result.stdout || result.stderr || "No output";
+    await ctx.telegram.editMessageText(
+      msg.chat.id, msg.message_id, undefined,
+      `${label} — *${server.name}*:\n\`\`\`\n${truncateOutput(output)}\n\`\`\``,
+      { parse_mode: "Markdown" }
+    );
+    logExecution(userId(ctx), `sysinfo:${section}`, output, result.exitCode === 0 ? "success" : "failure", server.id);
   }
 
   // /process
