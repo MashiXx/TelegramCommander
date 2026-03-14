@@ -1,4 +1,5 @@
 import { Telegraf, Context, Markup } from "telegraf";
+import { message } from "telegraf/filters";
 import { CallbackQuery } from "telegraf/types";
 import { requireAuth } from "../auth/authGuard";
 import {
@@ -12,6 +13,15 @@ import {
   getSysOverview, getSysCpu, getSysMemory, getSysDisk, getSysNetwork, getSysAll,
 } from "../services/systemService";
 import { deployApp } from "../services/deployService";
+
+// ---------- edit-server session state ----------
+
+interface EditSession {
+  serverName: string;
+  field: "host" | "port" | "username" | "sshkey" | "password" | "description";
+}
+
+const editSessions = new Map<number, EditSession>(); // key = telegram_id
 
 // ---------- helpers ----------
 
@@ -85,17 +95,61 @@ export function registerCommands(bot: Telegraf): void {
     await ctx.reply("*Commands:*\n" + cmds.join("\n"), { parse_mode: "Markdown" });
   });
 
-  // /servers
+  // /servers — list with Edit / Delete buttons
   bot.command("servers", requireAuth(), async (ctx) => {
     const servers = listServers();
     if (servers.length === 0) {
       await ctx.reply("No servers registered.");
       return;
     }
-    const lines = servers.map(
-      (s) => `*${s.name}*  \`${s.username}@${s.host}:${s.port}\`${s.description ? `  — ${s.description}` : ""}`
+    for (const s of servers) {
+      const info =
+        `*${s.name}*\n` +
+        `Host: \`${s.host}:${s.port}\`\n` +
+        `User: \`${s.username}\`\n` +
+        (s.ssh_key_path ? `Key:  \`${s.ssh_key_path}\`` : `Auth: \`password\``) +
+        (s.description ? `\n${s.description}` : "");
+      await ctx.reply(info, {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([
+          Markup.button.callback("✏️ Edit", `editsvr_pick:${s.name}`),
+          Markup.button.callback("🗑 Xoá",  `delsvr_confirm:${s.name}`),
+        ]),
+      });
+    }
+  });
+
+  // delete confirmation
+  bot.action(/^delsvr_confirm:(.+)$/, requireAuth("admin"), async (ctx) => {
+    const serverName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("delsvr_confirm:", "");
+    await ctx.answerCbQuery();
+    await ctx.editMessageReplyMarkup(
+      Markup.inlineKeyboard([
+        Markup.button.callback("✅ Xác nhận xoá", `delsvr_do:${serverName}`),
+        Markup.button.callback("❌ Huỷ",           `delsvr_cancel:${serverName}`),
+      ]).reply_markup
     );
-    await replyMd(ctx, lines.join("\n"));
+  });
+
+  bot.action(/^delsvr_do:(.+)$/, requireAuth("admin"), async (ctx) => {
+    const serverName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("delsvr_do:", "");
+    deleteServer(serverName);
+    await ctx.answerCbQuery("Đã xoá");
+    await ctx.deleteMessage();
+    await ctx.reply(`🗑 Server \`${serverName}\` đã được xoá.`, { parse_mode: "Markdown" });
+  });
+
+  bot.action(/^delsvr_cancel:(.+)$/, requireAuth("admin"), async (ctx) => {
+    const serverName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("delsvr_cancel:", "");
+    const server = findServer(serverName);
+    await ctx.answerCbQuery("Đã huỷ");
+    if (!server) { await ctx.deleteMessage(); return; }
+    await ctx.editMessageReplyMarkup(
+      Markup.inlineKeyboard([
+        Markup.button.callback("✏️ Edit", `editsvr_pick:${server.name}`),
+        Markup.button.callback("🗑 Xoá",  `delsvr_confirm:${server.name}`),
+      ]).reply_markup
+    );
   });
 
   // /status — inline keyboard if >1 server
@@ -364,22 +418,31 @@ export function registerCommands(bot: Telegraf): void {
     logExecution(userId(ctx), `run:${cmd.name}`, output, status, server.id);
   });
 
-  // /addserver name|host|port|user|/path/to/key|description
+  // /addserver name|host|port|user|key_or_password|description
+  // key_or_password: path starting with / or ~ = SSH key; otherwise = password; use "-" to leave empty
   bot.command("addserver", requireAuth("admin"), async (ctx) => {
     const raw = ctx.message.text.replace(/^\/addserver\s+/, "").trim();
     const parts = raw.split("|").map((s) => s.trim());
     if (parts.length < 5) {
       await ctx.reply(
-        "Usage: `/addserver name|host|port|user|/path/to/key|description`\n" +
-        "Example: `/addserver prod|192.168.1.10|22|ubuntu|/home/bot/.ssh/id_rsa|Production`",
+        "Usage: `/addserver name|host|port|user|key_or_pass|description`\n\n" +
+        "• SSH key: `/addserver prod|1.2.3.4|22|ubuntu|~/.ssh/id_rsa|Production`\n" +
+        "• Password: `/addserver prod|1.2.3.4|22|ubuntu|mypassword|Production`",
         { parse_mode: "Markdown" }
       );
       return;
     }
-    const [name, host, portStr, username, sshKeyPath, description] = parts;
+    const [name, host, portStr, username, cred, description] = parts;
     const port = parseInt(portStr, 10) || 22;
-    upsertServer(name, host, port, username, sshKeyPath, description);
-    await ctx.reply(`Server \`${name}\` saved.`, { parse_mode: "Markdown" });
+    const isKey = cred.startsWith("/") || cred.startsWith("~");
+    upsertServer(name, host, port, username,
+      isKey ? cred : null, description,
+      isKey ? undefined : cred
+    );
+    await ctx.reply(
+      `Server \`${name}\` saved (auth: ${isKey ? "SSH key" : "password"}).`,
+      { parse_mode: "Markdown" }
+    );
   });
 
   // /delserver <name>
@@ -388,6 +451,134 @@ export function registerCommands(bot: Telegraf): void {
     if (!name) { await ctx.reply("Usage: /delserver <name>"); return; }
     deleteServer(name);
     await ctx.reply(`Server \`${name}\` removed.`, { parse_mode: "Markdown" });
+  });
+
+  // /editserver — pick server then pick field to edit
+  bot.command("editserver", requireAuth("admin"), async (ctx) => {
+    const servers = listServers();
+    if (servers.length === 0) { await ctx.reply("No servers registered."); return; }
+    const buttons = servers.map((s) =>
+      Markup.button.callback(`🖥 ${s.name} (${s.host})`, `editsvr_pick:${s.name}`)
+    );
+    await ctx.reply("Chọn server cần chỉnh sửa:", Markup.inlineKeyboard(buttons, { columns: 1 }));
+  });
+
+  function serverFieldKeyboard(serverName: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback("🌐 Host",        `editsvr_field:host:${serverName}`),
+        Markup.button.callback("🔌 Port",        `editsvr_field:port:${serverName}`),
+      ],
+      [
+        Markup.button.callback("👤 Username",    `editsvr_field:username:${serverName}`),
+        Markup.button.callback("🔑 SSH Key Path", `editsvr_field:sshkey:${serverName}`),
+      ],
+      [
+        Markup.button.callback("🔒 Password",    `editsvr_field:password:${serverName}`),
+        Markup.button.callback("📝 Description", `editsvr_field:description:${serverName}`),
+      ],
+      [
+        Markup.button.callback("❌ Huỷ",          "editsvr_cancel"),
+      ],
+    ]);
+  }
+
+  bot.action(/^editsvr_pick:(.+)$/, requireAuth("admin"), async (ctx) => {
+    const serverName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("editsvr_pick:", "");
+    const server = findServer(serverName);
+    if (!server) { await ctx.answerCbQuery("Server not found"); return; }
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      `*${server.name}* — Chọn trường cần sửa:\n` +
+      `Host: \`${server.host}\`  Port: \`${server.port}\`\n` +
+      `User: \`${server.username}\`\n` +
+      (server.ssh_key_path ? `Key: \`${server.ssh_key_path}\`` : `Auth: \`password\``) + "\n" +
+      (server.description ? `Desc: ${server.description}` : ""),
+      { parse_mode: "Markdown", ...serverFieldKeyboard(server.name) }
+    );
+  });
+
+  bot.action(/^editsvr_field:(host|port|username|sshkey|password|description):(.+)$/, requireAuth("admin"), async (ctx) => {
+    const data = (ctx.callbackQuery as CallbackQuery.DataQuery).data;
+    const m = data.match(/^editsvr_field:(host|port|username|sshkey|password|description):(.+)$/);
+    if (!m) { await ctx.answerCbQuery(); return; }
+    const [, field, serverName] = m as [string, EditSession["field"], string];
+    await ctx.answerCbQuery();
+    editSessions.set(ctx.from!.id, { serverName, field });
+    const labels: Record<EditSession["field"], string> = {
+      host: "Host (IP hoặc domain)",
+      port: "Port (số)",
+      username: "Username SSH",
+      sshkey: "Đường dẫn SSH key",
+      password: "Mật khẩu SSH",
+      description: "Mô tả server",
+    };
+    await ctx.editMessageText(
+      `Nhập giá trị mới cho *${labels[field]}* của server *${serverName}*:\n_(Gửi /cancel để huỷ)_`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action("editsvr_cancel", async (ctx) => {
+    editSessions.delete(ctx.from!.id);
+    await ctx.answerCbQuery("Đã huỷ");
+    await ctx.deleteMessage();
+  });
+
+  // handle text input for edit session
+  bot.on(message("text"), requireAuth(), async (ctx, next) => {
+    const telegramId = ctx.from!.id;
+    const session = editSessions.get(telegramId);
+    if (!session) return next();
+
+    const text = ctx.message.text.trim();
+    if (text === "/cancel") {
+      editSessions.delete(telegramId);
+      await ctx.reply("Đã huỷ chỉnh sửa.");
+      return;
+    }
+
+    const server = findServer(session.serverName);
+    if (!server) {
+      editSessions.delete(telegramId);
+      await ctx.reply("Server không còn tồn tại.");
+      return;
+    }
+
+    const updated = {
+      host: server.host,
+      port: server.port,
+      username: server.username,
+      sshKeyPath: server.ssh_key_path,
+      sshPassword: server.ssh_password,
+      description: server.description ?? undefined,
+    };
+
+    if (session.field === "port") {
+      const p = parseInt(text, 10);
+      if (isNaN(p) || p < 1 || p > 65535) {
+        await ctx.reply("Port không hợp lệ. Vui lòng nhập số từ 1-65535.");
+        return;
+      }
+      updated.port = p;
+    } else if (session.field === "host")        { updated.host = text; }
+      else if (session.field === "username")    { updated.username = text; }
+      else if (session.field === "sshkey")      { updated.sshKeyPath = text; updated.sshPassword = null; }
+      else if (session.field === "password")    { updated.sshPassword = text; updated.sshKeyPath = null; }
+      else if (session.field === "description") { updated.description = text; }
+
+    upsertServer(server.name, updated.host, updated.port, updated.username,
+      updated.sshKeyPath ?? null, updated.description, updated.sshPassword ?? undefined);
+    editSessions.delete(telegramId);
+
+    const fieldLabels: Record<EditSession["field"], string> = {
+      host: "Host", port: "Port", username: "Username",
+      sshkey: "SSH Key Path", password: "Password", description: "Description",
+    };
+    await ctx.reply(
+      `✅ Đã cập nhật *${fieldLabels[session.field]}* của server *${server.name}*.\nGiá trị mới: \`${text}\``,
+      { parse_mode: "Markdown" }
+    );
   });
 
   // /addapp name|server|path|start_cmd|branch|build_cmd

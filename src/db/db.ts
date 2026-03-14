@@ -39,6 +39,31 @@ function initSchema(): void {
   const schemaPath = path.join(__dirname, "schema.sql");
   const schema = fs.readFileSync(schemaPath, "utf-8");
   db.exec(schema);
+  // migrations for existing databases
+  for (const col of ["ssh_key_path TEXT DEFAULT NULL", "ssh_password TEXT DEFAULT NULL"]) {
+    try { db.exec(`ALTER TABLE servers ADD COLUMN ${col}`); } catch { /* already exists */ }
+  }
+
+  // Fix NOT NULL constraint on ssh_key_path/ssh_password if created by older schema
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS servers_backup AS SELECT * FROM servers;
+      DROP TABLE IF EXISTS servers;
+      CREATE TABLE servers (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        name         TEXT NOT NULL UNIQUE,
+        host         TEXT NOT NULL,
+        port         INTEGER NOT NULL DEFAULT 22,
+        username     TEXT NOT NULL DEFAULT 'ubuntu',
+        ssh_key_path TEXT DEFAULT NULL,
+        ssh_password TEXT DEFAULT NULL,
+        description  TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO servers SELECT * FROM servers_backup;
+      DROP TABLE servers_backup;
+    `);
+  } catch { /* backup table might not match — ignore */ }
 }
 
 function seedDefaultData(): void {
@@ -73,7 +98,8 @@ export interface Server {
   host: string;
   port: number;
   username: string;
-  ssh_key_path: string;
+  ssh_key_path: string | null;
+  ssh_password: string | null;
   description: string | null;
   created_at: string;
 }
@@ -128,15 +154,22 @@ export function findServer(nameOrId: string | number): Server | undefined {
 
 export function upsertServer(
   name: string, host: string, port: number,
-  username: string, sshKeyPath: string, description?: string
+  username: string, sshKeyPath: string | null, description?: string,
+  sshPassword?: string
 ): void {
+  // Mutual exclusion: password set → clear key, key set → clear password
+  const keyVal = sshKeyPath || null;
+  const passVal = sshPassword || null;
+  const finalKey = passVal ? null : keyVal;
+  const finalPass = keyVal ? null : passVal;
+
   getDb().run(
-    `INSERT INTO servers (name, host, port, username, ssh_key_path, description)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO servers (name, host, port, username, ssh_key_path, ssh_password, description)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(name) DO UPDATE SET host=excluded.host, port=excluded.port,
        username=excluded.username, ssh_key_path=excluded.ssh_key_path,
-       description=excluded.description`,
-    [name, host, port, username, sshKeyPath, description ?? null]
+       ssh_password=excluded.ssh_password, description=excluded.description`,
+    [name, host, port, username, finalKey, finalPass, description ?? null]
   );
 }
 

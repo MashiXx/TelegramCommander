@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS servers (
   host         TEXT NOT NULL,
   port         INTEGER NOT NULL DEFAULT 22,
   username     TEXT NOT NULL DEFAULT 'ubuntu',
-  ssh_key_path TEXT NOT NULL,
+  ssh_key_path TEXT DEFAULT NULL,
+  ssh_password TEXT DEFAULT NULL,
   description  TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );

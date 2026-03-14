@@ -1,5 +1,6 @@
 import { Client, ConnectConfig } from "ssh2";
 import fs from "fs";
+import os from "os";
 import { Server } from "../db/db";
 import { config } from "../config/config";
 
@@ -48,12 +49,20 @@ export function sshExec(server: Server, script: string): Promise<ExecResult> {
       resolve({ stdout: "", stderr: `SSH connection error: ${err.message}`, exitCode: 1 });
     });
 
+    if (!server.ssh_key_path && !server.ssh_password) {
+      clearTimeout(timer);
+      resolve({ stdout: "", stderr: "No SSH credentials configured (key or password required).", exitCode: 1 });
+      return;
+    }
+
     const connectCfg: ConnectConfig = {
       host: server.host,
       port: server.port,
       username: server.username,
-      privateKey: fs.readFileSync(server.ssh_key_path),
       readyTimeout: 10_000,
+      ...(server.ssh_key_path
+        ? { privateKey: fs.readFileSync(server.ssh_key_path.replace(/^~/, os.homedir())) }
+        : { password: server.ssh_password! }),
     };
 
     conn.connect(connectCfg);
