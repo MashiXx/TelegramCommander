@@ -14,6 +14,7 @@ import {
   getSysOverview, getSysCpu, getSysMemory, getSysDisk, getSysNetwork, getSysAll,
 } from "../services/systemService";
 import { deployApp, restartApp } from "../services/deployService";
+import { config } from "../config/config";
 
 // ---------- edit-server session state ----------
 
@@ -23,6 +24,8 @@ interface EditSession {
 }
 
 const editSessions = new Map<number, EditSession>(); // key = telegram_id
+
+const CONFIG_DISABLED_MSG = "Chức năng cấu hình qua bot đã tắt. Vui lòng sử dụng Web Admin.";
 
 // ---------- helpers ----------
 
@@ -127,6 +130,7 @@ export function registerCommands(bot: Telegraf): void {
 
   // delete confirmation
   bot.action(/^delsvr_confirm:(.+)$/, requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.answerCbQuery(CONFIG_DISABLED_MSG); return; }
     const serverName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("delsvr_confirm:", "");
     await ctx.answerCbQuery();
     await ctx.editMessageReplyMarkup(
@@ -428,6 +432,7 @@ export function registerCommands(bot: Telegraf): void {
   // /addserver name|host|port|user|key_or_password|description
   // key_or_password: path starting with / or ~ = SSH key; otherwise = password; use "-" to leave empty
   bot.command("addserver", requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
     const raw = ctx.message.text.replace(/^\/addserver\s+/, "").trim();
     const parts = raw.split("|").map((s) => s.trim());
     if (parts.length < 5) {
@@ -454,6 +459,7 @@ export function registerCommands(bot: Telegraf): void {
 
   // /delserver <name>
   bot.command("delserver", requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
     const name = ctx.message.text.split(/\s+/)[1];
     if (!name) { await ctx.reply("Usage: /delserver <name>"); return; }
     deleteServer(name);
@@ -462,6 +468,7 @@ export function registerCommands(bot: Telegraf): void {
 
   // /editserver — pick server then pick field to edit
   bot.command("editserver", requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
     const servers = listServers();
     if (servers.length === 0) { await ctx.reply("No servers registered."); return; }
     const buttons = servers.map((s) =>
@@ -491,6 +498,7 @@ export function registerCommands(bot: Telegraf): void {
   }
 
   bot.action(/^editsvr_pick:(.+)$/, requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.answerCbQuery(CONFIG_DISABLED_MSG); return; }
     const serverName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("editsvr_pick:", "");
     const server = findServer(serverName);
     if (!server) { await ctx.answerCbQuery("Server not found"); return; }
@@ -590,6 +598,7 @@ export function registerCommands(bot: Telegraf): void {
 
   // /addapp name|server|path|start_cmd|branch|build_cmd|group
   bot.command("addapp", requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
     const raw = ctx.message.text.replace(/^\/addapp\s+/, "").trim();
     const parts = raw.split("|").map((s) => s.trim());
     if (parts.length < 5) {
@@ -629,6 +638,7 @@ export function registerCommands(bot: Telegraf): void {
 
   // /setgroup <app> <group>
   bot.command("setgroup", requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
     const args = ctx.message.text.split(/\s+/).slice(1);
     if (args.length < 2) {
       await ctx.reply("Usage: `/setgroup <app_name> <group_name>`", { parse_mode: "Markdown" });
@@ -643,6 +653,7 @@ export function registerCommands(bot: Telegraf): void {
 
   // /ungroup <app>
   bot.command("ungroup", requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
     const appName = ctx.message.text.split(/\s+/)[1];
     if (!appName) { await ctx.reply("Usage: `/ungroup <app_name>`", { parse_mode: "Markdown" }); return; }
     const app = findApp(appName);
@@ -735,6 +746,7 @@ export function registerCommands(bot: Telegraf): void {
 
   // /adduser <telegram_id> [role]
   bot.command("adduser", requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
     const args = ctx.message.text.split(/\s+/).slice(1);
     const rawId = parseInt(args[0] ?? "", 10);
     if (isNaN(rawId)) { await ctx.reply("Usage: /adduser <telegram_id> [admin|viewer]"); return; }

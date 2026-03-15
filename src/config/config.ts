@@ -18,4 +18,5 @@ export const config = {
   webEnabled: process.env.WEB_ENABLED !== "false",
   webUser: process.env.WEB_USER ?? "admin",
   webPass: process.env.WEB_PASS ?? "",
+  botConfigEnabled: process.env.BOT_CONFIG_ENABLED !== "false",
 };
