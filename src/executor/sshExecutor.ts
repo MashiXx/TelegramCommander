@@ -30,13 +30,17 @@ export function sshExec(server: Server, script: string): Promise<ExecResult> {
     conn.on("ready", () => {
       // Source common profile files to ensure PATH includes nvm, pm2, etc.
       // Non-interactive SSH doesn't load these by default.
+      // Works with both bash and zsh by sourcing relevant profiles.
       const profileLoader =
         'source /etc/profile 2>/dev/null; ' +
+        'source ~/.profile 2>/dev/null; ' +
         'source ~/.bash_profile 2>/dev/null; ' +
         'source ~/.bashrc 2>/dev/null; ' +
-        'source ~/.profile 2>/dev/null; ' +
+        'source ~/.zshrc 2>/dev/null; ' +
+        'source ~/.zprofile 2>/dev/null; ' +
         'source ~/.nvm/nvm.sh 2>/dev/null; ';
-      const wrappedScript = `bash -c ${shellQuote(profileLoader + script)}`;
+      // Use user's default login shell instead of hardcoding bash
+      const wrappedScript = profileLoader + script;
       conn.exec(wrappedScript, (err, stream) => {
         if (err) {
           clearTimeout(timer);
@@ -79,11 +83,6 @@ export function sshExec(server: Server, script: string): Promise<ExecResult> {
 
     conn.connect(connectCfg);
   });
-}
-
-/** Escape a string for safe use inside single quotes in bash */
-function shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
 /** Truncate output to fit Telegram's 4096-char message limit */
