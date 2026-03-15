@@ -97,18 +97,23 @@ export function registerCommands(bot: Telegraf): void {
       "/logs [lines]  — View PM2 logs",
       "/servers       — List servers",
       "/deploy <app>  — Deploy app (admin)",
+      "/restart <app> — Restart app (admin)",
       "/deploygroup <group> — Deploy all apps in group (admin)",
       "/restartgroup <group> — Restart all apps in group (admin)",
       "/groups        — List app groups",
-      "/setgroup <app> <group> — Assign app to group (admin)",
-      "/ungroup <app> — Remove app from group (admin)",
       "/run <cmd> <server> — Run whitelisted command (admin)",
-      "/addserver     — Register server (admin)",
-      "/editapp       — Edit application (admin)",
-      "/addapp        — Register application (admin)",
-      "/adduser <id> [role] — Add user (admin)",
       "/audit [n]     — Audit log (admin)",
     ];
+    if (config.botConfigEnabled) {
+      cmds.push(
+        "/setgroup <app> <group> — Assign app to group (admin)",
+        "/ungroup <app> — Remove app from group (admin)",
+        "/addserver     — Register server (admin)",
+        "/editapp       — Edit application (admin)",
+        "/addapp        — Register application (admin)",
+        "/adduser <id> [role] — Add user (admin)",
+      );
+    }
     await ctx.reply("*Commands:*\n" + cmds.join("\n"), { parse_mode: "Markdown" });
   });
 
@@ -386,7 +391,16 @@ export function registerCommands(bot: Telegraf): void {
   bot.command("deploy", requireAuth("admin"), async (ctx) => {
     const args = ctx.message.text.split(/\s+/).slice(1);
     const appName = args[0];
-    if (!appName) { await ctx.reply("Usage: /deploy <app_name>"); return; }
+    if (!appName) {
+      const apps = listApps();
+      if (apps.length === 0) { await ctx.reply("No apps registered."); return; }
+      const buttons = apps.map((a) => {
+        const server = findServer(a.server_id);
+        return Markup.button.callback(`🚀 ${a.name} (${server?.name ?? "?"})`, `deploy_app:${a.name}`);
+      });
+      await ctx.reply("Chọn app cần deploy:", Markup.inlineKeyboard(buttons, { columns: 1 }));
+      return;
+    }
     const app = findApp(appName);
     if (!app) { await ctx.reply(`Unknown app: \`${appName}\`\n\nUse /apps to list.`, { parse_mode: "Markdown" }); return; }
     const server = findServer(app.server_id);
@@ -405,12 +419,92 @@ export function registerCommands(bot: Telegraf): void {
     logExecution(userId(ctx), `deploy:${app.name}`, output, status, server.id);
   });
 
+  bot.action(/^deploy_app:(.+)$/, requireAuth("admin"), async (ctx) => {
+    const appName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("deploy_app:", "");
+    const app = findApp(appName);
+    if (!app) { await ctx.answerCbQuery("App not found"); return; }
+    const server = findServer(app.server_id);
+    if (!server) { await ctx.answerCbQuery("Server not found"); return; }
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
+
+    const msg = await ctx.reply(`Deploying *${app.name}* on *${server.name}*…`, { parse_mode: "Markdown" });
+    const result = await deployApp(server, app);
+    const output = result.stdout || result.stderr || "No output";
+    const status = result.exitCode === 0 ? "success" : "failure";
+    const icon = status === "success" ? "✅" : "❌";
+    await ctx.telegram.editMessageText(
+      msg.chat.id, msg.message_id, undefined,
+      `${icon} Deploy *${app.name}* on *${server.name}*:\n\`\`\`\n${truncateOutput(output)}\n\`\`\``,
+      { parse_mode: "Markdown" }
+    );
+    logExecution(userId(ctx), `deploy:${app.name}`, output, status, server.id);
+  });
+
+  // /restart <app> — restart single app
+  bot.command("restart", requireAuth("admin"), async (ctx) => {
+    const args = ctx.message.text.split(/\s+/).slice(1);
+    const appName = args[0];
+    if (!appName) {
+      const apps = listApps();
+      if (apps.length === 0) { await ctx.reply("No apps registered."); return; }
+      const buttons = apps.map((a) => {
+        const server = findServer(a.server_id);
+        return Markup.button.callback(`🔄 ${a.name} (${server?.name ?? "?"})`, `restart_app:${a.name}`);
+      });
+      await ctx.reply("Chọn app cần restart:", Markup.inlineKeyboard(buttons, { columns: 1 }));
+      return;
+    }
+    const app = findApp(appName);
+    if (!app) { await ctx.reply(`Unknown app: \`${appName}\`\n\nUse /apps to list.`, { parse_mode: "Markdown" }); return; }
+    const server = findServer(app.server_id);
+    if (!server) { await ctx.reply("Server for this app not found."); return; }
+    await runRestartApp(ctx, server, app);
+  });
+
+  bot.action(/^restart_app:(.+)$/, requireAuth("admin"), async (ctx) => {
+    const appName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("restart_app:", "");
+    const app = findApp(appName);
+    if (!app) { await ctx.answerCbQuery("App not found"); return; }
+    const server = findServer(app.server_id);
+    if (!server) { await ctx.answerCbQuery("Server not found"); return; }
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
+    await runRestartApp(ctx, server, app);
+  });
+
+  async function runRestartApp(ctx: Context, server: Server, app: App): Promise<void> {
+    const msg = await ctx.reply(`Restarting *${app.name}* on *${server.name}*…`, { parse_mode: "Markdown" });
+    const result = await restartApp(server, app);
+    const output = result.stdout || result.stderr || "No output";
+    const status = result.exitCode === 0 ? "success" : "failure";
+    const icon = status === "success" ? "✅" : "❌";
+    await ctx.telegram.editMessageText(
+      msg.chat.id, msg.message_id, undefined,
+      `${icon} Restart *${app.name}* on *${server.name}*:\n\`\`\`\n${truncateOutput(output)}\n\`\`\``,
+      { parse_mode: "Markdown" }
+    );
+    logExecution(userId(ctx), `restart:${app.name}`, output, status, server.id);
+  }
+
   // /run <cmd_name> <server_name>
   bot.command("run", requireAuth("admin"), async (ctx) => {
     const args = ctx.message.text.split(/\s+/).slice(1);
     if (args.length < 2) {
-      const all = listCommands().map((c) => `\`${c.name}\` — ${c.description}`).join("\n");
-      await ctx.reply(`Usage: /run <command> <server>\n\n*Commands:*\n${all}`, { parse_mode: "Markdown" });
+      const commands = listCommands();
+      const servers = listServers();
+      if (commands.length === 0 || servers.length === 0) {
+        const all = commands.map((c) => `\`${c.name}\` — ${c.description}`).join("\n");
+        await ctx.reply(`Usage: /run <command> <server>\n\n*Commands:*\n${all}`, { parse_mode: "Markdown" });
+        return;
+      }
+      const buttons: ReturnType<typeof Markup.button.callback>[] = [];
+      for (const cmd of commands) {
+        for (const srv of servers) {
+          buttons.push(Markup.button.callback(`▶️ ${cmd.name} @ ${srv.name}`, `run_cmd:${cmd.name}:${srv.name}`));
+        }
+      }
+      await ctx.reply("Chọn lệnh cần chạy:", Markup.inlineKeyboard(buttons, { columns: 1 }));
       return;
     }
     const [cmdName, serverName] = args;
@@ -424,6 +518,37 @@ export function registerCommands(bot: Telegraf): void {
       await ctx.reply("You do not have permission to run this command.");
       return;
     }
+
+    const msg = await ctx.reply(`Running \`${cmd.name}\` on *${server.name}*…`, { parse_mode: "Markdown" });
+    const result = await sshExec(server, cmd.script);
+    const output = result.stdout || result.stderr || "No output";
+    const status = result.exitCode === 0 ? "success" : "failure";
+    await ctx.telegram.editMessageText(
+      msg.chat.id, msg.message_id, undefined,
+      `\`\`\`\n${truncateOutput(output)}\n\`\`\``,
+      { parse_mode: "Markdown" }
+    );
+    logExecution(userId(ctx), `run:${cmd.name}`, output, status, server.id);
+  });
+
+  bot.action(/^run_cmd:(.+):(.+)$/, requireAuth("admin"), async (ctx) => {
+    const data = (ctx.callbackQuery as CallbackQuery.DataQuery).data;
+    const m = data.match(/^run_cmd:(.+):(.+)$/);
+    if (!m) { await ctx.answerCbQuery(); return; }
+    const [, cmdName, serverName] = m;
+    const cmd = findCommand(cmdName);
+    if (!cmd) { await ctx.answerCbQuery("Command not found"); return; }
+    const server = findServer(serverName);
+    if (!server) { await ctx.answerCbQuery("Server not found"); return; }
+
+    const user = findUser(ctx.from!.id)!;
+    if (!cmd.allowed_roles.split(",").includes(user.role)) {
+      await ctx.answerCbQuery("No permission");
+      return;
+    }
+
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
 
     const msg = await ctx.reply(`Running \`${cmd.name}\` on *${server.name}*…`, { parse_mode: "Markdown" });
     const result = await sshExec(server, cmd.script);
@@ -796,10 +921,10 @@ export function registerCommands(bot: Telegraf): void {
     if (!groupName) {
       const groups = listGroups();
       if (groups.length === 0) { await ctx.reply("Chưa có nhóm nào."); return; }
-      await ctx.reply(
-        `Usage: \`/deploygroup <group>\`\n\nNhóm hiện có: ${groups.map((g) => `\`${g}\``).join(", ")}`,
-        { parse_mode: "Markdown" }
+      const buttons = groups.map((g) =>
+        Markup.button.callback(`🚀 ${g} (${listAppsByGroup(g).length} apps)`, `deploygrp:${g}`)
       );
+      await ctx.reply("Chọn nhóm cần deploy:", Markup.inlineKeyboard(buttons, { columns: 1 }));
       return;
     }
     const apps = listAppsByGroup(groupName);
@@ -837,10 +962,10 @@ export function registerCommands(bot: Telegraf): void {
     if (!groupName) {
       const groups = listGroups();
       if (groups.length === 0) { await ctx.reply("Chưa có nhóm nào."); return; }
-      await ctx.reply(
-        `Usage: \`/restartgroup <group>\`\n\nNhóm hiện có: ${groups.map((g) => `\`${g}\``).join(", ")}`,
-        { parse_mode: "Markdown" }
+      const buttons = groups.map((g) =>
+        Markup.button.callback(`🔄 ${g} (${listAppsByGroup(g).length} apps)`, `restartgrp:${g}`)
       );
+      await ctx.reply("Chọn nhóm cần restart:", Markup.inlineKeyboard(buttons, { columns: 1 }));
       return;
     }
     const apps = listAppsByGroup(groupName);
@@ -865,6 +990,56 @@ export function registerCommands(bot: Telegraf): void {
       logExecution(userId(ctx), `restart:${app.name}`, result.stdout || result.stderr || "", status, server.id);
     }
 
+    await ctx.telegram.editMessageText(
+      msg.chat.id, msg.message_id, undefined,
+      `Restart nhóm *${groupName}*:\n${results.join("\n")}`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action(/^deploygrp:(.+)$/, requireAuth("admin"), async (ctx) => {
+    const groupName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("deploygrp:", "");
+    const apps = listAppsByGroup(groupName);
+    if (apps.length === 0) { await ctx.answerCbQuery("Nhóm không có app nào"); return; }
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
+
+    const msg = await ctx.reply(`Đang deploy nhóm *${groupName}* (${apps.length} apps)…`, { parse_mode: "Markdown" });
+    const results: string[] = [];
+    for (const app of apps) {
+      const server = findServer(app.server_id);
+      if (!server) { results.push(`❌ ${app.name}: server not found`); continue; }
+      const result = await deployApp(server, app);
+      const status = result.exitCode === 0 ? "success" : "failure";
+      const icon = status === "success" ? "✅" : "❌";
+      results.push(`${icon} *${app.name}* @ ${server.name}`);
+      logExecution(userId(ctx), `deploy:${app.name}`, result.stdout || result.stderr || "", status, server.id);
+    }
+    await ctx.telegram.editMessageText(
+      msg.chat.id, msg.message_id, undefined,
+      `Deploy nhóm *${groupName}*:\n${results.join("\n")}`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action(/^restartgrp:(.+)$/, requireAuth("admin"), async (ctx) => {
+    const groupName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("restartgrp:", "");
+    const apps = listAppsByGroup(groupName);
+    if (apps.length === 0) { await ctx.answerCbQuery("Nhóm không có app nào"); return; }
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
+
+    const msg = await ctx.reply(`Đang restart nhóm *${groupName}* (${apps.length} apps)…`, { parse_mode: "Markdown" });
+    const results: string[] = [];
+    for (const app of apps) {
+      const server = findServer(app.server_id);
+      if (!server) { results.push(`❌ ${app.name}: server not found`); continue; }
+      const result = await restartApp(server, app);
+      const status = result.exitCode === 0 ? "success" : "failure";
+      const icon = status === "success" ? "✅" : "❌";
+      results.push(`${icon} *${app.name}* @ ${server.name}`);
+      logExecution(userId(ctx), `restart:${app.name}`, result.stdout || result.stderr || "", status, server.id);
+    }
     await ctx.telegram.editMessageText(
       msg.chat.id, msg.message_id, undefined,
       `Restart nhóm *${groupName}*:\n${results.join("\n")}`,
