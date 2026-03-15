@@ -13,6 +13,12 @@ export function restartApp(server: Server, app: App): Promise<ExecResult> {
   return sshExec(server, app.start_command);
 }
 
+export function stopApp(server: Server, app: App): Promise<ExecResult> {
+  // Derive stop command from start_command by replacing "restart" with "stop"
+  const stopCmd = app.start_command.replace(/\brestart\b/, "stop");
+  return sshExec(server, stopCmd);
+}
+
 export function deployApp(server: Server, app: App): Promise<ExecResult> {
   if (/[`$;&|><]/.test(app.path)) {
     return Promise.resolve({ stdout: "", stderr: "Invalid application path.", exitCode: 1 });
