@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS apps (
   start_command  TEXT NOT NULL,
   build_command  TEXT,
   deploy_branch  TEXT NOT NULL DEFAULT 'main',
+  group_name     TEXT DEFAULT NULL,
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (server_id) REFERENCES servers(id)
 );

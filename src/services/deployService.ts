@@ -9,6 +9,10 @@ import { sshExec, ExecResult } from "../executor/sshExecutor";
  * 3. build (if defined)
  * 4. restart service
  */
+export function restartApp(server: Server, app: App): Promise<ExecResult> {
+  return sshExec(server, app.start_command);
+}
+
 export function deployApp(server: Server, app: App): Promise<ExecResult> {
   if (/[`$;&|><]/.test(app.path)) {
     return Promise.resolve({ stdout: "", stderr: "Invalid application path.", exitCode: 1 });

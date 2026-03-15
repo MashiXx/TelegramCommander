@@ -44,6 +44,9 @@ function initSchema(): void {
     try { db.exec(`ALTER TABLE servers ADD COLUMN ${col}`); } catch { /* already exists */ }
   }
 
+  // Add group_name column to apps
+  try { db.exec("ALTER TABLE apps ADD COLUMN group_name TEXT DEFAULT NULL"); } catch { /* already exists */ }
+
   // Fix NOT NULL constraint on ssh_key_path/ssh_password if created by older schema
   try {
     db.exec(`
@@ -121,6 +124,7 @@ export interface App {
   start_command: string;
   build_command: string | null;
   deploy_branch: string;
+  group_name: string | null;
   created_at: string;
 }
 
@@ -209,16 +213,34 @@ export function findApp(name: string): App | undefined {
 
 export function upsertApp(
   name: string, serverId: number, appPath: string,
-  startCommand: string, buildCommand: string | null, deployBranch: string
+  startCommand: string, buildCommand: string | null, deployBranch: string,
+  groupName?: string | null
 ): void {
   getDb().run(
-    `INSERT INTO apps (name, server_id, path, start_command, build_command, deploy_branch)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO apps (name, server_id, path, start_command, build_command, deploy_branch, group_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(name) DO UPDATE SET server_id=excluded.server_id, path=excluded.path,
        start_command=excluded.start_command, build_command=excluded.build_command,
-       deploy_branch=excluded.deploy_branch`,
-    [name, serverId, appPath, startCommand, buildCommand, deployBranch]
+       deploy_branch=excluded.deploy_branch, group_name=excluded.group_name`,
+    [name, serverId, appPath, startCommand, buildCommand, deployBranch, groupName ?? null]
   );
+}
+
+export function setAppGroup(appName: string, groupName: string | null): void {
+  getDb().run("UPDATE apps SET group_name = ? WHERE name = ?", [groupName, appName]);
+}
+
+export function listGroups(): string[] {
+  const rows = getDb().all(
+    "SELECT DISTINCT group_name FROM apps WHERE group_name IS NOT NULL ORDER BY group_name"
+  ) as Array<{ group_name: string }>;
+  return rows.map((r) => r.group_name);
+}
+
+export function listAppsByGroup(groupName: string): App[] {
+  return getDb().all(
+    "SELECT * FROM apps WHERE group_name = ? ORDER BY name", [groupName]
+  ) as App[];
 }
 
 // --- Log helpers ---

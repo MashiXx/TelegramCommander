@@ -5,14 +5,15 @@ import { requireAuth } from "../auth/authGuard";
 import {
   findUser, findCommand, listCommands, listApps, findApp, listServers, findServer,
   addUser, upsertApp, upsertServer, deleteServer, logExecution, getRecentLogs,
-  Server,
+  setAppGroup, listGroups, listAppsByGroup,
+  Server, App,
 } from "../db/db";
 import { sshExec, truncateOutput } from "../executor/sshExecutor";
 import {
   getSystemStatus, getProcessList, getPm2Logs,
   getSysOverview, getSysCpu, getSysMemory, getSysDisk, getSysNetwork, getSysAll,
 } from "../services/systemService";
-import { deployApp } from "../services/deployService";
+import { deployApp, restartApp } from "../services/deployService";
 
 // ---------- edit-server session state ----------
 
@@ -86,6 +87,11 @@ export function registerCommands(bot: Telegraf): void {
       "/logs [lines]  — View PM2 logs",
       "/servers       — List servers",
       "/deploy <app>  — Deploy app (admin)",
+      "/deploygroup <group> — Deploy all apps in group (admin)",
+      "/restartgroup <group> — Restart all apps in group (admin)",
+      "/groups        — List app groups",
+      "/setgroup <app> <group> — Assign app to group (admin)",
+      "/ungroup <app> — Remove app from group (admin)",
       "/run <cmd> <server> — Run whitelisted command (admin)",
       "/addserver     — Register server (admin)",
       "/addapp        — Register application (admin)",
@@ -327,7 +333,8 @@ export function registerCommands(bot: Telegraf): void {
     }
     const lines = apps.map((a) => {
       const server = findServer(a.server_id);
-      return `*${a.name}*  server: \`${server?.name ?? a.server_id}\`  branch: \`${a.deploy_branch}\`  path: \`${a.path}\``;
+      const group = a.group_name ? `  group: \`${a.group_name}\`` : "";
+      return `*${a.name}*  server: \`${server?.name ?? a.server_id}\`  branch: \`${a.deploy_branch}\`${group}  path: \`${a.path}\``;
     });
     await replyMd(ctx, lines.join("\n"));
   });
@@ -581,23 +588,149 @@ export function registerCommands(bot: Telegraf): void {
     );
   });
 
-  // /addapp name|server|path|start_cmd|branch|build_cmd
+  // /addapp name|server|path|start_cmd|branch|build_cmd|group
   bot.command("addapp", requireAuth("admin"), async (ctx) => {
     const raw = ctx.message.text.replace(/^\/addapp\s+/, "").trim();
     const parts = raw.split("|").map((s) => s.trim());
     if (parts.length < 5) {
       await ctx.reply(
-        "Usage: `/addapp name|server|path|start_cmd|branch|build_cmd`\n" +
-        "Example: `/addapp myapp|prod|/srv/myapp|pm2 restart myapp|main|npm run build`",
+        "Usage: `/addapp name|server|path|start_cmd|branch|build_cmd|group`\n" +
+        "Example: `/addapp myapp|prod|/srv/myapp|pm2 restart myapp|main|npm run build|backend`",
         { parse_mode: "Markdown" }
       );
       return;
     }
-    const [name, serverName, appPath, startCmd, branch, buildCmd] = parts;
+    const [name, serverName, appPath, startCmd, branch, buildCmd, groupName] = parts;
     const server = findServer(serverName);
     if (!server) { await ctx.reply(`Unknown server: \`${serverName}\``, { parse_mode: "Markdown" }); return; }
-    upsertApp(name, server.id, appPath, startCmd, buildCmd ?? null, branch);
-    await ctx.reply(`App \`${name}\` saved on server \`${serverName}\`.`, { parse_mode: "Markdown" });
+    upsertApp(name, server.id, appPath, startCmd, buildCmd ?? null, branch, groupName);
+    const groupInfo = groupName ? ` group: \`${groupName}\`` : "";
+    await ctx.reply(`App \`${name}\` saved on server \`${serverName}\`.${groupInfo}`, { parse_mode: "Markdown" });
+  });
+
+  // /groups — list all groups and their apps
+  bot.command("groups", requireAuth(), async (ctx) => {
+    const groups = listGroups();
+    if (groups.length === 0) {
+      await ctx.reply("Chưa có nhóm nào. Dùng /setgroup <app> <group> để gán app vào nhóm.");
+      return;
+    }
+    const lines: string[] = [];
+    for (const g of groups) {
+      const apps = listAppsByGroup(g);
+      const appNames = apps.map((a) => {
+        const server = findServer(a.server_id);
+        return `  • \`${a.name}\` @ \`${server?.name ?? "?"}\``;
+      });
+      lines.push(`*${g}* (${apps.length} apps)\n${appNames.join("\n")}`);
+    }
+    await replyMd(ctx, lines.join("\n\n"));
+  });
+
+  // /setgroup <app> <group>
+  bot.command("setgroup", requireAuth("admin"), async (ctx) => {
+    const args = ctx.message.text.split(/\s+/).slice(1);
+    if (args.length < 2) {
+      await ctx.reply("Usage: `/setgroup <app_name> <group_name>`", { parse_mode: "Markdown" });
+      return;
+    }
+    const [appName, groupName] = args;
+    const app = findApp(appName);
+    if (!app) { await ctx.reply(`Unknown app: \`${appName}\``, { parse_mode: "Markdown" }); return; }
+    setAppGroup(appName, groupName);
+    await ctx.reply(`App \`${appName}\` đã được gán vào nhóm \`${groupName}\`.`, { parse_mode: "Markdown" });
+  });
+
+  // /ungroup <app>
+  bot.command("ungroup", requireAuth("admin"), async (ctx) => {
+    const appName = ctx.message.text.split(/\s+/)[1];
+    if (!appName) { await ctx.reply("Usage: `/ungroup <app_name>`", { parse_mode: "Markdown" }); return; }
+    const app = findApp(appName);
+    if (!app) { await ctx.reply(`Unknown app: \`${appName}\``, { parse_mode: "Markdown" }); return; }
+    setAppGroup(appName, null);
+    await ctx.reply(`App \`${appName}\` đã được xoá khỏi nhóm.`, { parse_mode: "Markdown" });
+  });
+
+  // /deploygroup <group> — deploy all apps in a group
+  bot.command("deploygroup", requireAuth("admin"), async (ctx) => {
+    const groupName = ctx.message.text.split(/\s+/)[1];
+    if (!groupName) {
+      const groups = listGroups();
+      if (groups.length === 0) { await ctx.reply("Chưa có nhóm nào."); return; }
+      await ctx.reply(
+        `Usage: \`/deploygroup <group>\`\n\nNhóm hiện có: ${groups.map((g) => `\`${g}\``).join(", ")}`,
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+    const apps = listAppsByGroup(groupName);
+    if (apps.length === 0) {
+      await ctx.reply(`Nhóm \`${groupName}\` không có app nào.`, { parse_mode: "Markdown" });
+      return;
+    }
+
+    const msg = await ctx.reply(
+      `Đang deploy nhóm *${groupName}* (${apps.length} apps)…`,
+      { parse_mode: "Markdown" }
+    );
+
+    const results: string[] = [];
+    for (const app of apps) {
+      const server = findServer(app.server_id);
+      if (!server) { results.push(`❌ ${app.name}: server not found`); continue; }
+      const result = await deployApp(server, app);
+      const status = result.exitCode === 0 ? "success" : "failure";
+      const icon = status === "success" ? "✅" : "❌";
+      results.push(`${icon} *${app.name}* @ ${server.name}`);
+      logExecution(userId(ctx), `deploy:${app.name}`, result.stdout || result.stderr || "", status, server.id);
+    }
+
+    await ctx.telegram.editMessageText(
+      msg.chat.id, msg.message_id, undefined,
+      `Deploy nhóm *${groupName}*:\n${results.join("\n")}`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  // /restartgroup <group> — restart all apps in a group (start_command only)
+  bot.command("restartgroup", requireAuth("admin"), async (ctx) => {
+    const groupName = ctx.message.text.split(/\s+/)[1];
+    if (!groupName) {
+      const groups = listGroups();
+      if (groups.length === 0) { await ctx.reply("Chưa có nhóm nào."); return; }
+      await ctx.reply(
+        `Usage: \`/restartgroup <group>\`\n\nNhóm hiện có: ${groups.map((g) => `\`${g}\``).join(", ")}`,
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+    const apps = listAppsByGroup(groupName);
+    if (apps.length === 0) {
+      await ctx.reply(`Nhóm \`${groupName}\` không có app nào.`, { parse_mode: "Markdown" });
+      return;
+    }
+
+    const msg = await ctx.reply(
+      `Đang restart nhóm *${groupName}* (${apps.length} apps)…`,
+      { parse_mode: "Markdown" }
+    );
+
+    const results: string[] = [];
+    for (const app of apps) {
+      const server = findServer(app.server_id);
+      if (!server) { results.push(`❌ ${app.name}: server not found`); continue; }
+      const result = await restartApp(server, app);
+      const status = result.exitCode === 0 ? "success" : "failure";
+      const icon = status === "success" ? "✅" : "❌";
+      results.push(`${icon} *${app.name}* @ ${server.name}`);
+      logExecution(userId(ctx), `restart:${app.name}`, result.stdout || result.stderr || "", status, server.id);
+    }
+
+    await ctx.telegram.editMessageText(
+      msg.chat.id, msg.message_id, undefined,
+      `Restart nhóm *${groupName}*:\n${results.join("\n")}`,
+      { parse_mode: "Markdown" }
+    );
   });
 
   // /adduser <telegram_id> [role]
