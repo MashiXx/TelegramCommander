@@ -222,7 +222,10 @@ async function loadServers() {
     <td>${esc(s.host)}</td><td>${s.port}</td><td>${esc(s.username)}</td>
     <td>${s.ssh_key_path ? '<span class="badge badge-blue">key</span>' : '<span class="badge badge-gray">password</span>'}</td>
     <td>${esc(s.description || '')}</td>
-    <td><button class="btn btn-danger btn-sm" onclick="delServer('${esc(s.name)}')">Delete</button></td>
+    <td>
+      <button class="btn btn-primary btn-sm" onclick="showEditServerModal('${esc(s.name)}')">Edit</button>
+      <button class="btn btn-danger btn-sm" onclick="delServer('${esc(s.name)}')">Delete</button>
+    </td>
   </tr>`).join('');
 }
 
@@ -238,7 +241,7 @@ async function loadApps() {
       <td>${a.group_name ? `<span class="badge badge-green">${esc(a.group_name)}</span>` : '<span class="badge badge-gray">none</span>'}</td>
       <td style="max-width:200px">${esc(a.path)}</td>
       <td>
-        <button class="btn btn-primary btn-sm" onclick="showGroupModal('${esc(a.name)}','${esc(a.group_name||'')}')">Group</button>
+        <button class="btn btn-primary btn-sm" onclick="showEditAppModal('${esc(a.name)}')">Edit</button>
         <button class="btn btn-danger btn-sm" onclick="delApp('${esc(a.name)}')">Delete</button>
       </td>
     </tr>`;
@@ -370,6 +373,46 @@ function showGroupModal(appName, currentGroup) {
   document.getElementById('modal-bg').classList.remove('hidden');
 }
 
+function showEditServerModal(name) {
+  const s = serversCache.find(x => x.name === name);
+  if (!s) return;
+  const el = document.getElementById('modal-content');
+  el.innerHTML = `<h3>Edit Server: ${esc(s.name)}</h3>
+    <label>Host *</label><input id="m-es-host" value="${esc(s.host)}">
+    <label>Port</label><input id="m-es-port" value="${s.port}" type="number">
+    <label>SSH User</label><input id="m-es-user" value="${esc(s.username)}">
+    <label>SSH Key Path</label><input id="m-es-key" value="${esc(s.ssh_key_path||'')}" placeholder="/home/user/.ssh/key">
+    <label>SSH Password (if no key)</label><input id="m-es-pass" type="password" placeholder="Leave empty to keep current">
+    <label>Description</label><input id="m-es-desc" value="${esc(s.description||'')}">
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="updateServer('${esc(s.name)}')">Save</button>
+    </div>`;
+  document.getElementById('modal-bg').classList.remove('hidden');
+}
+
+function showEditAppModal(name) {
+  api('GET', '/apps').then(apps => {
+    const a = apps.find(x => x.name === name);
+    if (!a) return;
+    const srv = serversCache.find(s => s.id === a.server_id);
+    const opts = serversCache.map(s => `<option value="${esc(s.name)}" ${s.id === a.server_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+    const el = document.getElementById('modal-content');
+    el.innerHTML = `<h3>Edit App: ${esc(a.name)}</h3>
+      <label>Server *</label><select id="m-ea-server">${opts}</select>
+      <label>Path *</label><input id="m-ea-path" value="${esc(a.path)}">
+      <label>Start Command *</label><input id="m-ea-start" value="${esc(a.start_command)}">
+      <label>Build Command</label><input id="m-ea-build" value="${esc(a.build_command||'')}">
+      <label>Branch</label><input id="m-ea-branch" value="${esc(a.deploy_branch)}">
+      <label>Group</label><input id="m-ea-group" value="${esc(a.group_name||'')}">
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="updateApp('${esc(a.name)}')">Save</button>
+      </div>`;
+    document.getElementById('modal-bg').classList.remove('hidden');
+  });
+}
+
 // ─── Save handlers ───
 async function saveServer() {
   await api('POST', '/servers', {
@@ -398,6 +441,26 @@ async function saveCommand() {
 async function saveGroup(appName) {
   const gn = v('m-g-name').trim() || null;
   await api('PUT', `/apps/${appName}/group`, { group_name: gn });
+  closeModal(); loadApps(); loadGroups();
+}
+async function updateServer(name) {
+  const body = {
+    host: v('m-es-host'), port: parseInt(v('m-es-port'))||22,
+    username: v('m-es-user')||'ubuntu', description: v('m-es-desc')||null,
+  };
+  const key = v('m-es-key');
+  const pass = v('m-es-pass');
+  if (key) { body.ssh_key_path = key; body.ssh_password = null; }
+  else if (pass) { body.ssh_password = pass; body.ssh_key_path = null; }
+  await api('PUT', `/servers/${name}`, body);
+  closeModal(); loadServers();
+}
+async function updateApp(name) {
+  await api('PUT', `/apps/${name}`, {
+    server_name: v('m-ea-server'), path: v('m-ea-path'),
+    start_command: v('m-ea-start'), build_command: v('m-ea-build')||null,
+    deploy_branch: v('m-ea-branch')||'main', group_name: v('m-ea-group')||null,
+  });
   closeModal(); loadApps(); loadGroups();
 }
 

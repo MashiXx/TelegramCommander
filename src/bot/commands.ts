@@ -16,14 +16,21 @@ import {
 import { deployApp, restartApp } from "../services/deployService";
 import { config } from "../config/config";
 
-// ---------- edit-server session state ----------
+// ---------- edit session state ----------
 
 interface EditSession {
+  type: "server";
   serverName: string;
   field: "host" | "port" | "username" | "sshkey" | "password" | "description";
 }
 
-const editSessions = new Map<number, EditSession>(); // key = telegram_id
+interface EditAppSession {
+  type: "app";
+  appName: string;
+  field: "server" | "path" | "start_command" | "build_command" | "deploy_branch" | "group_name";
+}
+
+const editSessions = new Map<number, EditSession | EditAppSession>(); // key = telegram_id
 
 const CONFIG_DISABLED_MSG = "Chức năng cấu hình qua bot đã tắt. Vui lòng sử dụng Web Admin.";
 
@@ -97,6 +104,7 @@ export function registerCommands(bot: Telegraf): void {
       "/ungroup <app> — Remove app from group (admin)",
       "/run <cmd> <server> — Run whitelisted command (admin)",
       "/addserver     — Register server (admin)",
+      "/editapp       — Edit application (admin)",
       "/addapp        — Register application (admin)",
       "/adduser <id> [role] — Add user (admin)",
       "/audit [n]     — Audit log (admin)",
@@ -519,7 +527,7 @@ export function registerCommands(bot: Telegraf): void {
     if (!m) { await ctx.answerCbQuery(); return; }
     const [, field, serverName] = m as [string, EditSession["field"], string];
     await ctx.answerCbQuery();
-    editSessions.set(ctx.from!.id, { serverName, field });
+    editSessions.set(ctx.from!.id, { type: "server", serverName, field });
     const labels: Record<EditSession["field"], string> = {
       host: "Host (IP hoặc domain)",
       port: "Port (số)",
@@ -540,7 +548,85 @@ export function registerCommands(bot: Telegraf): void {
     await ctx.deleteMessage();
   });
 
-  // handle text input for edit session
+  // /editapp — pick app then pick field to edit
+  bot.command("editapp", requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
+    const apps = listApps();
+    if (apps.length === 0) { await ctx.reply("No apps registered."); return; }
+    const buttons = apps.map((a) => {
+      const server = findServer(a.server_id);
+      return Markup.button.callback(`📦 ${a.name} (${server?.name ?? "?"})`, `editapp_pick:${a.name}`);
+    });
+    await ctx.reply("Chọn app cần chỉnh sửa:", Markup.inlineKeyboard(buttons, { columns: 1 }));
+  });
+
+  function appFieldKeyboard(appName: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback("🖥 Server",       `editapp_field:server:${appName}`),
+        Markup.button.callback("📁 Path",          `editapp_field:path:${appName}`),
+      ],
+      [
+        Markup.button.callback("▶️ Start Cmd",     `editapp_field:start_command:${appName}`),
+        Markup.button.callback("🔨 Build Cmd",     `editapp_field:build_command:${appName}`),
+      ],
+      [
+        Markup.button.callback("🌿 Branch",        `editapp_field:deploy_branch:${appName}`),
+        Markup.button.callback("📂 Group",          `editapp_field:group_name:${appName}`),
+      ],
+      [
+        Markup.button.callback("❌ Huỷ",            "editapp_cancel"),
+      ],
+    ]);
+  }
+
+  bot.action(/^editapp_pick:(.+)$/, requireAuth("admin"), async (ctx) => {
+    if (!config.botConfigEnabled) { await ctx.answerCbQuery(CONFIG_DISABLED_MSG); return; }
+    const appName = (ctx.callbackQuery as CallbackQuery.DataQuery).data.replace("editapp_pick:", "");
+    const app = findApp(appName);
+    if (!app) { await ctx.answerCbQuery("App not found"); return; }
+    const server = findServer(app.server_id);
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      `*${app.name}* — Chọn trường cần sửa:\n` +
+      `Server: \`${server?.name ?? "?"}\`\n` +
+      `Path: \`${app.path}\`\n` +
+      `Start: \`${app.start_command}\`\n` +
+      (app.build_command ? `Build: \`${app.build_command}\`\n` : "") +
+      `Branch: \`${app.deploy_branch}\`\n` +
+      (app.group_name ? `Group: \`${app.group_name}\`` : "Group: _none_"),
+      { parse_mode: "Markdown", ...appFieldKeyboard(app.name) }
+    );
+  });
+
+  bot.action(/^editapp_field:(server|path|start_command|build_command|deploy_branch|group_name):(.+)$/, requireAuth("admin"), async (ctx) => {
+    const data = (ctx.callbackQuery as CallbackQuery.DataQuery).data;
+    const m = data.match(/^editapp_field:(server|path|start_command|build_command|deploy_branch|group_name):(.+)$/);
+    if (!m) { await ctx.answerCbQuery(); return; }
+    const [, field, appName] = m as [string, EditAppSession["field"], string];
+    await ctx.answerCbQuery();
+    editSessions.set(ctx.from!.id, { type: "app", appName, field });
+    const labels: Record<EditAppSession["field"], string> = {
+      server: "Tên server",
+      path: "Đường dẫn ứng dụng",
+      start_command: "Lệnh khởi động",
+      build_command: "Lệnh build",
+      deploy_branch: "Branch deploy",
+      group_name: "Tên nhóm (gửi - để xoá)",
+    };
+    await ctx.editMessageText(
+      `Nhập giá trị mới cho *${labels[field]}* của app *${appName}*:\n_(Gửi /cancel để huỷ)_`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  bot.action("editapp_cancel", async (ctx) => {
+    editSessions.delete(ctx.from!.id);
+    await ctx.answerCbQuery("Đã huỷ");
+    await ctx.deleteMessage();
+  });
+
+  // handle text input for edit session (server & app)
   bot.on(message("text"), requireAuth(), async (ctx, next) => {
     const telegramId = ctx.from!.id;
     const session = editSessions.get(telegramId);
@@ -553,47 +639,89 @@ export function registerCommands(bot: Telegraf): void {
       return;
     }
 
-    const server = findServer(session.serverName);
-    if (!server) {
-      editSessions.delete(telegramId);
-      await ctx.reply("Server không còn tồn tại.");
-      return;
-    }
-
-    const updated = {
-      host: server.host,
-      port: server.port,
-      username: server.username,
-      sshKeyPath: server.ssh_key_path,
-      sshPassword: server.ssh_password,
-      description: server.description ?? undefined,
-    };
-
-    if (session.field === "port") {
-      const p = parseInt(text, 10);
-      if (isNaN(p) || p < 1 || p > 65535) {
-        await ctx.reply("Port không hợp lệ. Vui lòng nhập số từ 1-65535.");
+    if (session.type === "server") {
+      const server = findServer(session.serverName);
+      if (!server) {
+        editSessions.delete(telegramId);
+        await ctx.reply("Server không còn tồn tại.");
         return;
       }
-      updated.port = p;
-    } else if (session.field === "host")        { updated.host = text; }
-      else if (session.field === "username")    { updated.username = text; }
-      else if (session.field === "sshkey")      { updated.sshKeyPath = text; updated.sshPassword = null; }
-      else if (session.field === "password")    { updated.sshPassword = text; updated.sshKeyPath = null; }
-      else if (session.field === "description") { updated.description = text; }
 
-    upsertServer(server.name, updated.host, updated.port, updated.username,
-      updated.sshKeyPath ?? null, updated.description, updated.sshPassword ?? undefined);
-    editSessions.delete(telegramId);
+      const updated = {
+        host: server.host,
+        port: server.port,
+        username: server.username,
+        sshKeyPath: server.ssh_key_path,
+        sshPassword: server.ssh_password,
+        description: server.description ?? undefined,
+      };
 
-    const fieldLabels: Record<EditSession["field"], string> = {
-      host: "Host", port: "Port", username: "Username",
-      sshkey: "SSH Key Path", password: "Password", description: "Description",
-    };
-    await ctx.reply(
-      `✅ Đã cập nhật *${fieldLabels[session.field]}* của server *${server.name}*.\nGiá trị mới: \`${text}\``,
-      { parse_mode: "Markdown" }
-    );
+      if (session.field === "port") {
+        const p = parseInt(text, 10);
+        if (isNaN(p) || p < 1 || p > 65535) {
+          await ctx.reply("Port không hợp lệ. Vui lòng nhập số từ 1-65535.");
+          return;
+        }
+        updated.port = p;
+      } else if (session.field === "host")        { updated.host = text; }
+        else if (session.field === "username")    { updated.username = text; }
+        else if (session.field === "sshkey")      { updated.sshKeyPath = text; updated.sshPassword = null; }
+        else if (session.field === "password")    { updated.sshPassword = text; updated.sshKeyPath = null; }
+        else if (session.field === "description") { updated.description = text; }
+
+      upsertServer(server.name, updated.host, updated.port, updated.username,
+        updated.sshKeyPath ?? null, updated.description, updated.sshPassword ?? undefined);
+      editSessions.delete(telegramId);
+
+      const fieldLabels: Record<EditSession["field"], string> = {
+        host: "Host", port: "Port", username: "Username",
+        sshkey: "SSH Key Path", password: "Password", description: "Description",
+      };
+      await ctx.reply(
+        `✅ Đã cập nhật *${fieldLabels[session.field]}* của server *${server.name}*.\nGiá trị mới: \`${text}\``,
+        { parse_mode: "Markdown" }
+      );
+    } else {
+      // Edit app session
+      const app = findApp(session.appName);
+      if (!app) {
+        editSessions.delete(telegramId);
+        await ctx.reply("App không còn tồn tại.");
+        return;
+      }
+
+      if (session.field === "server") {
+        const newServer = findServer(text);
+        if (!newServer) {
+          await ctx.reply(`Server \`${text}\` không tồn tại. Vui lòng nhập lại.`, { parse_mode: "Markdown" });
+          return;
+        }
+        upsertApp(app.name, newServer.id, app.path, app.start_command, app.build_command, app.deploy_branch, app.group_name);
+      } else if (session.field === "group_name") {
+        const val = text === "-" ? null : text;
+        upsertApp(app.name, app.server_id, app.path, app.start_command, app.build_command, app.deploy_branch, val);
+      } else if (session.field === "build_command") {
+        const val = text === "-" ? null : text;
+        upsertApp(app.name, app.server_id, app.path, app.start_command, val, app.deploy_branch, app.group_name);
+      } else if (session.field === "path") {
+        upsertApp(app.name, app.server_id, text, app.start_command, app.build_command, app.deploy_branch, app.group_name);
+      } else if (session.field === "start_command") {
+        upsertApp(app.name, app.server_id, app.path, text, app.build_command, app.deploy_branch, app.group_name);
+      } else if (session.field === "deploy_branch") {
+        upsertApp(app.name, app.server_id, app.path, app.start_command, app.build_command, text, app.group_name);
+      }
+
+      editSessions.delete(telegramId);
+
+      const fieldLabels: Record<EditAppSession["field"], string> = {
+        server: "Server", path: "Path", start_command: "Start Command",
+        build_command: "Build Command", deploy_branch: "Branch", group_name: "Group",
+      };
+      await ctx.reply(
+        `✅ Đã cập nhật *${fieldLabels[session.field]}* của app *${app.name}*.\nGiá trị mới: \`${text}\``,
+        { parse_mode: "Markdown" }
+      );
+    }
   });
 
   // /addapp name|server|path|start_cmd|branch|build_cmd|group

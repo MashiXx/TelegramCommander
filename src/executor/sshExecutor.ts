@@ -25,8 +25,19 @@ export function sshExec(server: Server, script: string): Promise<ExecResult> {
       resolve({ stdout, stderr: stderr + "\n[timeout]", exitCode: 124 });
     }, config.commandTimeoutMs);
 
+    console.log(`SSH exec on ${server.name} (${server.host}): ${script}`);
+
     conn.on("ready", () => {
-      conn.exec(script, (err, stream) => {
+      // Source common profile files to ensure PATH includes nvm, pm2, etc.
+      // Non-interactive SSH doesn't load these by default.
+      const profileLoader =
+        'source /etc/profile 2>/dev/null; ' +
+        'source ~/.bash_profile 2>/dev/null; ' +
+        'source ~/.bashrc 2>/dev/null; ' +
+        'source ~/.profile 2>/dev/null; ' +
+        'source ~/.nvm/nvm.sh 2>/dev/null; ';
+      const wrappedScript = `bash -c ${shellQuote(profileLoader + script)}`;
+      conn.exec(wrappedScript, (err, stream) => {
         if (err) {
           clearTimeout(timer);
           conn.end();
@@ -39,6 +50,7 @@ export function sshExec(server: Server, script: string): Promise<ExecResult> {
         stream.on("close", (code: number) => {
           clearTimeout(timer);
           conn.end();
+          console.log(`SSH exec completed on ${server.name} with exit code ${code}. ${stderr} ${stdout}`);
           resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode: code ?? 0 });
         });
       });
@@ -67,6 +79,11 @@ export function sshExec(server: Server, script: string): Promise<ExecResult> {
 
     conn.connect(connectCfg);
   });
+}
+
+/** Escape a string for safe use inside single quotes in bash */
+function shellQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
 /** Truncate output to fit Telegram's 4096-char message limit */

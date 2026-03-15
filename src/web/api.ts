@@ -27,6 +27,23 @@ router.post("/servers", (req: Request, res: Response) => {
   res.json(findServer(name));
 });
 
+router.put("/servers/:name", (req: Request, res: Response) => {
+  const name = param(req, "name");
+  const server = findServer(name);
+  if (!server) { res.status(404).json({ error: "Server not found" }); return; }
+  const { host, port, username, ssh_key_path, ssh_password, description } = req.body;
+  upsertServer(
+    name,
+    host ?? server.host,
+    port ?? server.port,
+    username ?? server.username,
+    ssh_key_path !== undefined ? ssh_key_path : server.ssh_key_path,
+    description !== undefined ? description : server.description ?? undefined,
+    ssh_password !== undefined ? ssh_password : server.ssh_password ?? undefined,
+  );
+  res.json(findServer(name));
+});
+
 router.delete("/servers/:name", (req: Request, res: Response) => {
   deleteServer(param(req, "name"));
   res.json({ ok: true });
@@ -54,6 +71,29 @@ router.put("/apps/:name/group", (req: Request, res: Response) => {
   const app = findApp(appName);
   if (!app) { res.status(404).json({ error: "App not found" }); return; }
   setAppGroup(appName, req.body.group_name ?? null);
+  res.json(findApp(appName));
+});
+
+router.put("/apps/:name", (req: Request, res: Response) => {
+  const appName = param(req, "name");
+  const app = findApp(appName);
+  if (!app) { res.status(404).json({ error: "App not found" }); return; }
+  const { server_name, path, start_command, build_command, deploy_branch, group_name } = req.body;
+  let serverId = app.server_id;
+  if (server_name) {
+    const server = findServer(server_name);
+    if (!server) { res.status(400).json({ error: `Unknown server: ${server_name}` }); return; }
+    serverId = server.id;
+  }
+  upsertApp(
+    appName,
+    serverId,
+    path ?? app.path,
+    start_command ?? app.start_command,
+    build_command !== undefined ? build_command : app.build_command,
+    deploy_branch ?? app.deploy_branch,
+    group_name !== undefined ? group_name : app.group_name,
+  );
   res.json(findApp(appName));
 });
 
