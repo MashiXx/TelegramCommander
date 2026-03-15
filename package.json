@@ -4,18 +4,20 @@
   "description": "Telegram bot for server management",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/web/public dist/web/public",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "watch": "tsc --watch"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
+    "express": "^5.2.1",
     "node-sqlite3-wasm": "^0.8.10",
     "ssh2": "^1.17.0",
     "telegraf": "^4.16.3"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^20.12.7",
     "@types/ssh2": "^1.15.5",
     "ts-node": "^10.9.2",

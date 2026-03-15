@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TelegramCommander Admin</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --primary: #3b82f6; --danger: #ef4444; --success: #22c55e; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Login */
+  #login-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  #login-overlay.hidden { display: none; }
+  .login-box { background: var(--card); padding: 2rem; border-radius: 12px; width: 320px; }
+  .login-box h2 { margin-bottom: 1rem; }
+  .login-box input { width: 100%; padding: 0.5rem; margin-bottom: 0.75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+  .login-box button { width: 100%; padding: 0.6rem; background: var(--primary); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; }
+
+  /* Layout */
+  .header { background: var(--card); border-bottom: 1px solid var(--border); padding: 1rem 1.5rem; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 1.2rem; }
+  .header button { background: none; border: 1px solid var(--border); color: var(--muted); padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; }
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--card); padding: 0 1rem; overflow-x: auto; }
+  .tab { padding: 0.75rem 1.25rem; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; }
+  .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .content { max-width: 1100px; margin: 1.5rem auto; padding: 0 1rem; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+  th { background: var(--bg); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
+  tr:last-child td { border-bottom: none; }
+  td { word-break: break-all; }
+
+  /* Buttons */
+  .btn { padding: 0.35rem 0.7rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-success { background: var(--success); color: #fff; }
+  .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+  .toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal-bg.hidden { display: none; }
+  .modal { background: var(--card); padding: 1.5rem; border-radius: 12px; width: 460px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+  .modal h3 { margin-bottom: 1rem; }
+  .modal label { display: block; color: var(--muted); font-size: 0.8rem; margin: 0.6rem 0 0.2rem; }
+  .modal input, .modal select { width: 100%; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 0.9rem; }
+  .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+
+  /* Badge */
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
+  .badge-blue { background: #1e3a5f; color: #60a5fa; }
+  .badge-green { background: #14532d; color: #86efac; }
+  .badge-gray { background: #374151; color: #9ca3af; }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    table { font-size: 0.8rem; }
+    th, td { padding: 0.4rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Login overlay -->
+<div id="login-overlay">
+  <div class="login-box">
+    <h2>TelegramCommander</h2>
+    <input type="text" id="login-user" placeholder="Username" value="admin">
+    <input type="password" id="login-pass" placeholder="Password">
+    <button onclick="doLogin()">Login</button>
+    <p id="login-error" style="color:var(--danger);margin-top:0.5rem;font-size:0.85rem;"></p>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <div class="header">
+    <h1>TelegramCommander Admin</h1>
+    <button onclick="logout()">Logout</button>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="servers">Servers</div>
+    <div class="tab" data-tab="apps">Apps</div>
+    <div class="tab" data-tab="groups">Groups</div>
+    <div class="tab" data-tab="users">Users</div>
+    <div class="tab" data-tab="commands">Commands</div>
+    <div class="tab" data-tab="logs">Logs</div>
+  </div>
+
+  <div class="content">
+    <!-- Servers -->
+    <div class="panel active" id="panel-servers">
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="showModal('server')">+ Add Server</button>
+      </div>
+      <table><thead><tr><th>Name</th><th>Host</th><th>Port</th><th>User</th><th>Auth</th><th>Description</th><th></th></tr></thead>
+      <tbody id="servers-body"></tbody></table>
+    </div>
+
+    <!-- Apps -->
+    <div class="panel" id="panel-apps">
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="showModal('app')">+ Add App</button>
+      </div>
+      <table><thead><tr><th>Name</th><th>Server</th><th>Branch</th><th>Group</th><th>Path</th><th></th></tr></thead>
+      <tbody id="apps-body"></tbody></table>
+    </div>
+
+    <!-- Groups -->
+    <div class="panel" id="panel-groups">
+      <div id="groups-content"></div>
+    </div>
+
+    <!-- Users -->
+    <div class="panel" id="panel-users">
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="showModal('user')">+ Add User</button>
+      </div>
+      <table><thead><tr><th>Telegram ID</th><th>Username</th><th>Role</th><th>Created</th><th></th></tr></thead>
+      <tbody id="users-body"></tbody></table>
+    </div>
+
+    <!-- Commands -->
+    <div class="panel" id="panel-commands">
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="showModal('command')">+ Add Command</button>
+      </div>
+      <table><thead><tr><th>Name</th><th>Description</th><th>Script</th><th>Roles</th></tr></thead>
+      <tbody id="commands-body"></tbody></table>
+    </div>
+
+    <!-- Logs -->
+    <div class="panel" id="panel-logs">
+      <table><thead><tr><th>Time</th><th>User</th><th>Server</th><th>Command</th><th>Status</th></tr></thead>
+      <tbody id="logs-body"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-bg hidden" id="modal-bg" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<script>
+let authHeader = '';
+const API = '/api';
+
+// ─── Auth ───
+function doLogin() {
+  const user = document.getElementById('login-user').value;
+  const pass = document.getElementById('login-pass').value;
+  authHeader = 'Basic ' + btoa(user + ':' + pass);
+  api('GET', '/servers').then(() => {
+    localStorage.setItem('auth', authHeader);
+    document.getElementById('login-overlay').classList.add('hidden');
+    document.getElementById('app').style.display = '';
+    loadAll();
+  }).catch(() => {
+    document.getElementById('login-error').textContent = 'Invalid credentials';
+  });
+}
+
+function logout() {
+  localStorage.removeItem('auth');
+  authHeader = '';
+  document.getElementById('login-overlay').classList.remove('hidden');
+  document.getElementById('app').style.display = 'none';
+}
+
+// Try saved auth
+const saved = localStorage.getItem('auth');
+if (saved) {
+  authHeader = saved;
+  api('GET', '/servers').then(() => {
+    document.getElementById('login-overlay').classList.add('hidden');
+    document.getElementById('app').style.display = '';
+    loadAll();
+  }).catch(() => { localStorage.removeItem('auth'); });
+}
+
+// Enter key on login
+document.getElementById('login-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+// ─── API helper ───
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(API + path, opts);
+  if (res.status === 401) throw new Error('Unauthorized');
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || 'Request failed'); }
+  return res.json();
+}
+
+// ─── Tabs ───
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ─── Data cache ───
+let serversCache = [];
+
+// ─── Load all ───
+function loadAll() { loadServers(); loadApps(); loadGroups(); loadUsers(); loadCommands(); loadLogs(); }
+
+async function loadServers() {
+  serversCache = await api('GET', '/servers');
+  const tbody = document.getElementById('servers-body');
+  tbody.innerHTML = serversCache.map(s => `<tr>
+    <td><strong>${esc(s.name)}</strong></td>
+    <td>${esc(s.host)}</td><td>${s.port}</td><td>${esc(s.username)}</td>
+    <td>${s.ssh_key_path ? '<span class="badge badge-blue">key</span>' : '<span class="badge badge-gray">password</span>'}</td>
+    <td>${esc(s.description || '')}</td>
+    <td><button class="btn btn-danger btn-sm" onclick="delServer('${esc(s.name)}')">Delete</button></td>
+  </tr>`).join('');
+}
+
+async function loadApps() {
+  const apps = await api('GET', '/apps');
+  const tbody = document.getElementById('apps-body');
+  tbody.innerHTML = apps.map(a => {
+    const srv = serversCache.find(s => s.id === a.server_id);
+    return `<tr>
+      <td><strong>${esc(a.name)}</strong></td>
+      <td>${esc(srv?.name || '?')}</td>
+      <td>${esc(a.deploy_branch)}</td>
+      <td>${a.group_name ? `<span class="badge badge-green">${esc(a.group_name)}</span>` : '<span class="badge badge-gray">none</span>'}</td>
+      <td style="max-width:200px">${esc(a.path)}</td>
+      <td>
+        <button class="btn btn-primary btn-sm" onclick="showGroupModal('${esc(a.name)}','${esc(a.group_name||'')}')">Group</button>
+        <button class="btn btn-danger btn-sm" onclick="delApp('${esc(a.name)}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadGroups() {
+  const groups = await api('GET', '/groups');
+  const el = document.getElementById('groups-content');
+  if (groups.length === 0) {
+    el.innerHTML = '<p style="color:var(--muted)">No groups yet. Assign apps to groups from the Apps tab.</p>';
+    return;
+  }
+  el.innerHTML = groups.map(g => `
+    <div style="background:var(--card);border-radius:8px;padding:1rem;margin-bottom:1rem;">
+      <h3 style="margin-bottom:0.5rem">${esc(g.name)} <span style="color:var(--muted);font-size:0.85rem">(${g.apps.length} apps)</span></h3>
+      <table><thead><tr><th>App</th><th>Server</th><th>Branch</th><th>Path</th></tr></thead>
+      <tbody>${g.apps.map(a => `<tr>
+        <td>${esc(a.name)}</td><td>${esc(a.server_name||'?')}</td>
+        <td>${esc(a.deploy_branch)}</td><td>${esc(a.path)}</td>
+      </tr>`).join('')}</tbody></table>
+    </div>
+  `).join('');
+}
+
+async function loadUsers() {
+  const users = await api('GET', '/users');
+  const tbody = document.getElementById('users-body');
+  tbody.innerHTML = users.map(u => `<tr>
+    <td>${u.telegram_id}</td><td>${esc(u.username||'')}</td>
+    <td><span class="badge ${u.role==='admin'?'badge-blue':'badge-gray'}">${u.role}</span></td>
+    <td>${u.created_at}</td>
+    <td><button class="btn btn-danger btn-sm" onclick="delUser(${u.telegram_id})">Delete</button></td>
+  </tr>`).join('');
+}
+
+async function loadCommands() {
+  const cmds = await api('GET', '/commands');
+  const tbody = document.getElementById('commands-body');
+  tbody.innerHTML = cmds.map(c => `<tr>
+    <td><strong>${esc(c.name)}</strong></td><td>${esc(c.description)}</td>
+    <td style="max-width:300px;font-family:monospace;font-size:0.8rem">${esc(c.script)}</td>
+    <td>${esc(c.allowed_roles)}</td>
+  </tr>`).join('');
+}
+
+async function loadLogs() {
+  const logs = await api('GET', '/logs?limit=50');
+  const tbody = document.getElementById('logs-body');
+  tbody.innerHTML = logs.map(l => `<tr>
+    <td style="white-space:nowrap">${esc(l.created_at)}</td>
+    <td>${esc(l.username||String(l.telegram_id))}</td>
+    <td>${esc(l.server_name||'local')}</td>
+    <td>${esc(l.command)}</td>
+    <td><span class="badge ${l.status==='success'?'badge-green':'badge-blue'}">${l.status}</span></td>
+  </tr>`).join('');
+}
+
+// ─── Delete ───
+async function delServer(name) { if (!confirm(`Delete server "${name}"?`)) return; await api('DELETE',`/servers/${name}`); loadServers(); loadApps(); loadGroups(); }
+async function delApp(name) { if (!confirm(`Delete app "${name}"?`)) return; await api('DELETE',`/apps/${name}`); loadApps(); loadGroups(); }
+async function delUser(tid) { if (!confirm(`Delete user ${tid}?`)) return; await api('DELETE',`/users/${tid}`); loadUsers(); }
+
+// ─── Modals ───
+function closeModal() { document.getElementById('modal-bg').classList.add('hidden'); }
+
+function showModal(type) {
+  const el = document.getElementById('modal-content');
+  const mb = document.getElementById('modal-bg');
+
+  if (type === 'server') {
+    el.innerHTML = `<h3>Add Server</h3>
+      <label>Name *</label><input id="m-s-name">
+      <label>Host *</label><input id="m-s-host">
+      <label>Port</label><input id="m-s-port" value="22" type="number">
+      <label>SSH User</label><input id="m-s-user" value="ubuntu">
+      <label>SSH Key Path</label><input id="m-s-key" placeholder="/home/user/.ssh/key">
+      <label>SSH Password (if no key)</label><input id="m-s-pass" type="password">
+      <label>Description</label><input id="m-s-desc">
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveServer()">Save</button>
+      </div>`;
+  } else if (type === 'app') {
+    const opts = serversCache.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+    el.innerHTML = `<h3>Add App</h3>
+      <label>Name *</label><input id="m-a-name">
+      <label>Server *</label><select id="m-a-server">${opts}</select>
+      <label>Path *</label><input id="m-a-path" placeholder="/srv/myapp">
+      <label>Start Command *</label><input id="m-a-start" placeholder="pm2 restart myapp">
+      <label>Build Command</label><input id="m-a-build" placeholder="npm run build">
+      <label>Branch</label><input id="m-a-branch" value="main">
+      <label>Group</label><input id="m-a-group" placeholder="backend">
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveApp()">Save</button>
+      </div>`;
+  } else if (type === 'user') {
+    el.innerHTML = `<h3>Add User</h3>
+      <label>Telegram ID *</label><input id="m-u-tid" type="number">
+      <label>Username</label><input id="m-u-name">
+      <label>Role</label><select id="m-u-role"><option value="viewer">viewer</option><option value="admin">admin</option></select>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveUser()">Save</button>
+      </div>`;
+  } else if (type === 'command') {
+    el.innerHTML = `<h3>Add Command</h3>
+      <label>Name *</label><input id="m-c-name">
+      <label>Description</label><input id="m-c-desc">
+      <label>Script *</label><input id="m-c-script" placeholder="pm2 list">
+      <label>Allowed Roles</label><input id="m-c-roles" value="admin,viewer">
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCommand()">Save</button>
+      </div>`;
+  }
+  mb.classList.remove('hidden');
+}
+
+function showGroupModal(appName, currentGroup) {
+  const el = document.getElementById('modal-content');
+  el.innerHTML = `<h3>Set Group for "${esc(appName)}"</h3>
+    <label>Group Name (empty to remove)</label><input id="m-g-name" value="${esc(currentGroup)}">
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveGroup('${esc(appName)}')">Save</button>
+    </div>`;
+  document.getElementById('modal-bg').classList.remove('hidden');
+}
+
+// ─── Save handlers ───
+async function saveServer() {
+  await api('POST', '/servers', {
+    name: v('m-s-name'), host: v('m-s-host'), port: parseInt(v('m-s-port'))||22,
+    username: v('m-s-user')||'ubuntu', ssh_key_path: v('m-s-key')||null,
+    ssh_password: v('m-s-pass')||null, description: v('m-s-desc')||null,
+  });
+  closeModal(); loadServers();
+}
+async function saveApp() {
+  await api('POST', '/apps', {
+    name: v('m-a-name'), server_name: v('m-a-server'), path: v('m-a-path'),
+    start_command: v('m-a-start'), build_command: v('m-a-build')||null,
+    deploy_branch: v('m-a-branch')||'main', group_name: v('m-a-group')||null,
+  });
+  closeModal(); loadApps(); loadGroups();
+}
+async function saveUser() {
+  await api('POST', '/users', { telegram_id: v('m-u-tid'), username: v('m-u-name')||null, role: v('m-u-role') });
+  closeModal(); loadUsers();
+}
+async function saveCommand() {
+  await api('POST', '/commands', { name: v('m-c-name'), description: v('m-c-desc'), script: v('m-c-script'), allowed_roles: v('m-c-roles') });
+  closeModal(); loadCommands();
+}
+async function saveGroup(appName) {
+  const gn = v('m-g-name').trim() || null;
+  await api('PUT', `/apps/${appName}/group`, { group_name: gn });
+  closeModal(); loadApps(); loadGroups();
+}
+
+// ─── Util ───
+function v(id) { return document.getElementById(id).value.trim(); }
+function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+</script>
+</body>
+</html>

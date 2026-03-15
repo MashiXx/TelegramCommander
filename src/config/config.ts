@@ -14,4 +14,8 @@ export const config = {
   databasePath: process.env.DATABASE_PATH ?? "./data/bot.db",
   commandTimeoutMs: parseInt(process.env.COMMAND_TIMEOUT_MS ?? "30000", 10),
   dataDir: path.dirname(process.env.DATABASE_PATH ?? "./data/bot.db"),
+  webPort: parseInt(process.env.WEB_PORT ?? "3000", 10),
+  webEnabled: process.env.WEB_ENABLED !== "false",
+  webUser: process.env.WEB_USER ?? "admin",
+  webPass: process.env.WEB_PASS ?? "",
 };
