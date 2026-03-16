@@ -339,9 +339,11 @@ export function registerCommands(bot: Telegraf): void {
   bot.command("apps", requireAuth(), async (ctx) => {
     const args = ctx.message.text.split(/\s+/).slice(1);
     let apps;
+    let filterServer: Server | undefined;
     if (args[0]) {
       const server = findServer(args[0]);
       if (!server) { await ctx.reply(`Unknown server: ${args[0]}`); return; }
+      filterServer = server;
       apps = listApps(server.id);
     } else {
       apps = listApps();
@@ -355,7 +357,57 @@ export function registerCommands(bot: Telegraf): void {
       const group = a.group_name ? `  group: \`${a.group_name}\`` : "";
       return `*${a.name}*  server: \`${server?.name ?? a.server_id}\`  branch: \`${a.deploy_branch}\`${group}  path: \`${a.path}\``;
     });
-    await replyMd(ctx, lines.join("\n"));
+
+    // Build suggestion buttons for each app
+    const appButtons = apps.map((a) => [
+      Markup.button.callback(`🚀 Deploy ${a.name}`, `deploy_app:${a.name}`),
+      Markup.button.callback(`🔄 Restart ${a.name}`, `restart_app:${a.name}`),
+      Markup.button.callback(`⛔ Stop ${a.name}`, `stop_app:${a.name}`),
+    ]);
+
+    // Add server filter buttons if not already filtered and multiple servers exist
+    const servers = listServers();
+    if (!filterServer && servers.length > 1) {
+      const serverButtons = servers.map((s) =>
+        Markup.button.callback(`🖥 ${s.name}`, `apps_server:${s.name}`)
+      );
+      appButtons.push(serverButtons);
+    }
+
+    await ctx.reply(
+      lines.join("\n"),
+      { parse_mode: "Markdown", ...Markup.inlineKeyboard(appButtons) }
+    );
+  });
+
+  // Callback: filter apps by server
+  bot.action(/^apps_server:(.+)$/, requireAuth(), async (ctx) => {
+    const data = (ctx.callbackQuery as CallbackQuery.DataQuery).data;
+    const serverName = data.match(/^apps_server:(.+)$/)![1];
+    const server = findServer(serverName);
+    if (!server) { await ctx.answerCbQuery("Server not found"); return; }
+    await ctx.answerCbQuery();
+
+    const apps = listApps(server.id);
+    if (apps.length === 0) {
+      await ctx.editMessageText(`No apps on server *${server.name}*.`, { parse_mode: "Markdown" });
+      return;
+    }
+    const lines = apps.map((a) => {
+      const group = a.group_name ? `  group: \`${a.group_name}\`` : "";
+      return `*${a.name}*  server: \`${server.name}\`  branch: \`${a.deploy_branch}\`${group}  path: \`${a.path}\``;
+    });
+
+    const appButtons = apps.map((a) => [
+      Markup.button.callback(`🚀 Deploy ${a.name}`, `deploy_app:${a.name}`),
+      Markup.button.callback(`🔄 Restart ${a.name}`, `restart_app:${a.name}`),
+      Markup.button.callback(`⛔ Stop ${a.name}`, `stop_app:${a.name}`),
+    ]);
+
+    await ctx.editMessageText(
+      `📂 *Apps on ${server.name}:*\n` + lines.join("\n"),
+      { parse_mode: "Markdown", ...Markup.inlineKeyboard(appButtons) }
+    );
   });
 
   // /logs [lines]
