@@ -14,8 +14,8 @@ export function restartApp(server: Server, app: App): Promise<ExecResult> {
 }
 
 export function stopApp(server: Server, app: App): Promise<ExecResult> {
-  // Derive stop command from start_command by replacing "restart" with "stop"
-  const stopCmd = app.start_command.replace(/\brestart\b/, "stop");
+  // Use configured stop_command if available, otherwise derive from start_command
+  const stopCmd = app.stop_command || app.start_command.replace(/\brestart\b/, "stop");
   return sshExec(server, stopCmd);
 }
 

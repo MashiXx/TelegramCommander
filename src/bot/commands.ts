@@ -27,7 +27,7 @@ interface EditSession {
 interface EditAppSession {
   type: "app";
   appName: string;
-  field: "server" | "path" | "start_command" | "build_command" | "deploy_branch" | "group_name";
+  field: "server" | "path" | "start_command" | "stop_command" | "build_command" | "deploy_branch" | "group_name";
 }
 
 const editSessions = new Map<number, EditSession | EditAppSession>(); // key = telegram_id
@@ -793,6 +793,9 @@ export function registerCommands(bot: Telegraf): void {
       ],
       [
         Markup.button.callback("▶️ Start Cmd",     `editapp_field:start_command:${appName}`),
+        Markup.button.callback("⏹ Stop Cmd",      `editapp_field:stop_command:${appName}`),
+      ],
+      [
         Markup.button.callback("🔨 Build Cmd",     `editapp_field:build_command:${appName}`),
       ],
       [
@@ -817,6 +820,7 @@ export function registerCommands(bot: Telegraf): void {
       `Server: \`${server?.name ?? "?"}\`\n` +
       `Path: \`${app.path}\`\n` +
       `Start: \`${app.start_command}\`\n` +
+      (app.stop_command ? `Stop: \`${app.stop_command}\`\n` : "") +
       (app.build_command ? `Build: \`${app.build_command}\`\n` : "") +
       `Branch: \`${app.deploy_branch}\`\n` +
       (app.group_name ? `Group: \`${app.group_name}\`` : "Group: _none_"),
@@ -824,9 +828,9 @@ export function registerCommands(bot: Telegraf): void {
     );
   });
 
-  bot.action(/^editapp_field:(server|path|start_command|build_command|deploy_branch|group_name):(.+)$/, requireAuth("admin"), async (ctx) => {
+  bot.action(/^editapp_field:(server|path|start_command|stop_command|build_command|deploy_branch|group_name):(.+)$/, requireAuth("admin"), async (ctx) => {
     const data = (ctx.callbackQuery as CallbackQuery.DataQuery).data;
-    const m = data.match(/^editapp_field:(server|path|start_command|build_command|deploy_branch|group_name):(.+)$/);
+    const m = data.match(/^editapp_field:(server|path|start_command|stop_command|build_command|deploy_branch|group_name):(.+)$/);
     if (!m) { await ctx.answerCbQuery(); return; }
     const [, field, appName] = m as [string, EditAppSession["field"], string];
     await ctx.answerCbQuery();
@@ -835,6 +839,7 @@ export function registerCommands(bot: Telegraf): void {
       server: "Tên server",
       path: "Đường dẫn ứng dụng",
       start_command: "Lệnh khởi động",
+      stop_command: "Lệnh dừng (gửi - để xoá)",
       build_command: "Lệnh build",
       deploy_branch: "Branch deploy",
       group_name: "Tên nhóm (gửi - để xoá)",
@@ -921,26 +926,29 @@ export function registerCommands(bot: Telegraf): void {
           await ctx.reply(`Server \`${text}\` không tồn tại. Vui lòng nhập lại.`, { parse_mode: "Markdown" });
           return;
         }
-        upsertApp(app.name, newServer.id, app.path, app.start_command, app.build_command, app.deploy_branch, app.group_name);
+        upsertApp(app.name, newServer.id, app.path, app.start_command, app.build_command, app.deploy_branch, app.group_name, app.stop_command);
       } else if (session.field === "group_name") {
         const val = text === "-" ? null : text;
-        upsertApp(app.name, app.server_id, app.path, app.start_command, app.build_command, app.deploy_branch, val);
+        upsertApp(app.name, app.server_id, app.path, app.start_command, app.build_command, app.deploy_branch, val, app.stop_command);
       } else if (session.field === "build_command") {
         const val = text === "-" ? null : text;
-        upsertApp(app.name, app.server_id, app.path, app.start_command, val, app.deploy_branch, app.group_name);
+        upsertApp(app.name, app.server_id, app.path, app.start_command, val, app.deploy_branch, app.group_name, app.stop_command);
       } else if (session.field === "path") {
-        upsertApp(app.name, app.server_id, text, app.start_command, app.build_command, app.deploy_branch, app.group_name);
+        upsertApp(app.name, app.server_id, text, app.start_command, app.build_command, app.deploy_branch, app.group_name, app.stop_command);
       } else if (session.field === "start_command") {
-        upsertApp(app.name, app.server_id, app.path, text, app.build_command, app.deploy_branch, app.group_name);
+        upsertApp(app.name, app.server_id, app.path, text, app.build_command, app.deploy_branch, app.group_name, app.stop_command);
+      } else if (session.field === "stop_command") {
+        const val = text === "-" ? null : text;
+        upsertApp(app.name, app.server_id, app.path, app.start_command, app.build_command, app.deploy_branch, app.group_name, val);
       } else if (session.field === "deploy_branch") {
-        upsertApp(app.name, app.server_id, app.path, app.start_command, app.build_command, text, app.group_name);
+        upsertApp(app.name, app.server_id, app.path, app.start_command, app.build_command, text, app.group_name, app.stop_command);
       }
 
       editSessions.delete(telegramId);
 
       const fieldLabels: Record<EditAppSession["field"], string> = {
         server: "Server", path: "Path", start_command: "Start Command",
-        build_command: "Build Command", deploy_branch: "Branch", group_name: "Group",
+        stop_command: "Stop Command", build_command: "Build Command", deploy_branch: "Branch", group_name: "Group",
       };
       await ctx.reply(
         `✅ Đã cập nhật *${fieldLabels[session.field]}* của app *${app.name}*.\nGiá trị mới: \`${text}\``,
@@ -949,23 +957,23 @@ export function registerCommands(bot: Telegraf): void {
     }
   });
 
-  // /addapp name|server|path|start_cmd|branch|build_cmd|group
+  // /addapp name|server|path|start_cmd|branch|build_cmd|group|stop_cmd
   bot.command("addapp", requireAuth("admin"), async (ctx) => {
     if (!config.botConfigEnabled) { await ctx.reply(CONFIG_DISABLED_MSG); return; }
     const raw = ctx.message.text.replace(/^\/addapp\s+/, "").trim();
     const parts = raw.split("|").map((s) => s.trim());
     if (parts.length < 5) {
       await ctx.reply(
-        "Usage: `/addapp name|server|path|start_cmd|branch|build_cmd|group`\n" +
-        "Example: `/addapp myapp|prod|/srv/myapp|pm2 restart myapp|main|npm run build|backend`",
+        "Usage: `/addapp name|server|path|start_cmd|branch|build_cmd|group|stop_cmd`\n" +
+        "Example: `/addapp myapp|prod|/srv/myapp|pm2 restart myapp|main|npm run build|backend|pm2 stop myapp`",
         { parse_mode: "Markdown" }
       );
       return;
     }
-    const [name, serverName, appPath, startCmd, branch, buildCmd, groupName] = parts;
+    const [name, serverName, appPath, startCmd, branch, buildCmd, groupName, stopCmd] = parts;
     const server = findServer(serverName);
     if (!server) { await ctx.reply(`Unknown server: \`${serverName}\``, { parse_mode: "Markdown" }); return; }
-    upsertApp(name, server.id, appPath, startCmd, buildCmd ?? null, branch, groupName);
+    upsertApp(name, server.id, appPath, startCmd, buildCmd ?? null, branch, groupName, stopCmd ?? null);
     const groupInfo = groupName ? ` group: \`${groupName}\`` : "";
     await ctx.reply(`App \`${name}\` saved on server \`${serverName}\`.${groupInfo}`, { parse_mode: "Markdown" });
   });

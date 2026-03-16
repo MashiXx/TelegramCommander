@@ -56,13 +56,13 @@ router.get("/apps", (_req, res) => {
 });
 
 router.post("/apps", (req: Request, res: Response) => {
-  const { name, server_name, path, start_command, build_command, deploy_branch, group_name } = req.body;
+  const { name, server_name, path, start_command, build_command, deploy_branch, group_name, stop_command } = req.body;
   if (!name || !server_name || !path || !start_command) {
     res.status(400).json({ error: "name, server_name, path, start_command required" }); return;
   }
   const server = findServer(server_name);
   if (!server) { res.status(400).json({ error: `Unknown server: ${server_name}` }); return; }
-  upsertApp(name, server.id, path, start_command, build_command ?? null, deploy_branch ?? "main", group_name);
+  upsertApp(name, server.id, path, start_command, build_command ?? null, deploy_branch ?? "main", group_name, stop_command ?? null);
   res.json(findApp(name));
 });
 
@@ -78,7 +78,7 @@ router.put("/apps/:name", (req: Request, res: Response) => {
   const appName = param(req, "name");
   const app = findApp(appName);
   if (!app) { res.status(404).json({ error: "App not found" }); return; }
-  const { server_name, path, start_command, build_command, deploy_branch, group_name } = req.body;
+  const { server_name, path, start_command, build_command, deploy_branch, group_name, stop_command } = req.body;
   let serverId = app.server_id;
   if (server_name) {
     const server = findServer(server_name);
@@ -93,6 +93,7 @@ router.put("/apps/:name", (req: Request, res: Response) => {
     build_command !== undefined ? build_command : app.build_command,
     deploy_branch ?? app.deploy_branch,
     group_name !== undefined ? group_name : app.group_name,
+    stop_command !== undefined ? stop_command : app.stop_command,
   );
   res.json(findApp(appName));
 });

@@ -47,6 +47,9 @@ function initSchema(): void {
   // Add group_name column to apps
   try { db.exec("ALTER TABLE apps ADD COLUMN group_name TEXT DEFAULT NULL"); } catch { /* already exists */ }
 
+  // Add stop_command column to apps
+  try { db.exec("ALTER TABLE apps ADD COLUMN stop_command TEXT DEFAULT NULL"); } catch { /* already exists */ }
+
   // Fix NOT NULL constraint on ssh_key_path/ssh_password if created by older schema
   try {
     db.exec(`
@@ -122,6 +125,7 @@ export interface App {
   server_id: number;
   path: string;
   start_command: string;
+  stop_command: string | null;
   build_command: string | null;
   deploy_branch: string;
   group_name: string | null;
@@ -214,15 +218,16 @@ export function findApp(name: string): App | undefined {
 export function upsertApp(
   name: string, serverId: number, appPath: string,
   startCommand: string, buildCommand: string | null, deployBranch: string,
-  groupName?: string | null
+  groupName?: string | null, stopCommand?: string | null
 ): void {
   getDb().run(
-    `INSERT INTO apps (name, server_id, path, start_command, build_command, deploy_branch, group_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO apps (name, server_id, path, start_command, build_command, deploy_branch, group_name, stop_command)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(name) DO UPDATE SET server_id=excluded.server_id, path=excluded.path,
        start_command=excluded.start_command, build_command=excluded.build_command,
-       deploy_branch=excluded.deploy_branch, group_name=excluded.group_name`,
-    [name, serverId, appPath, startCommand, buildCommand, deployBranch, groupName ?? null]
+       deploy_branch=excluded.deploy_branch, group_name=excluded.group_name,
+       stop_command=excluded.stop_command`,
+    [name, serverId, appPath, startCommand, buildCommand, deployBranch, groupName ?? null, stopCommand ?? null]
   );
 }
 

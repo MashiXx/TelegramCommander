@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS apps (
   server_id      INTEGER NOT NULL,
   path           TEXT NOT NULL,
   start_command  TEXT NOT NULL,
+  stop_command   TEXT DEFAULT NULL,
   build_command  TEXT,
   deploy_branch  TEXT NOT NULL DEFAULT 'main',
   group_name     TEXT DEFAULT NULL,

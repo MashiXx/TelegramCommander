@@ -332,6 +332,7 @@ function showModal(type) {
       <label>Server *</label><select id="m-a-server">${opts}</select>
       <label>Path *</label><input id="m-a-path" placeholder="/srv/myapp">
       <label>Start Command *</label><input id="m-a-start" placeholder="pm2 restart myapp">
+      <label>Stop Command</label><input id="m-a-stop" placeholder="pm2 stop myapp">
       <label>Build Command</label><input id="m-a-build" placeholder="npm run build">
       <label>Branch</label><input id="m-a-branch" value="main">
       <label>Group</label><input id="m-a-group" placeholder="backend">
@@ -402,6 +403,7 @@ function showEditAppModal(name) {
       <label>Server *</label><select id="m-ea-server">${opts}</select>
       <label>Path *</label><input id="m-ea-path" value="${esc(a.path)}">
       <label>Start Command *</label><input id="m-ea-start" value="${esc(a.start_command)}">
+      <label>Stop Command</label><input id="m-ea-stop" value="${esc(a.stop_command||'')}">
       <label>Build Command</label><input id="m-ea-build" value="${esc(a.build_command||'')}">
       <label>Branch</label><input id="m-ea-branch" value="${esc(a.deploy_branch)}">
       <label>Group</label><input id="m-ea-group" value="${esc(a.group_name||'')}">
@@ -425,7 +427,8 @@ async function saveServer() {
 async function saveApp() {
   await api('POST', '/apps', {
     name: v('m-a-name'), server_name: v('m-a-server'), path: v('m-a-path'),
-    start_command: v('m-a-start'), build_command: v('m-a-build')||null,
+    start_command: v('m-a-start'), stop_command: v('m-a-stop')||null,
+    build_command: v('m-a-build')||null,
     deploy_branch: v('m-a-branch')||'main', group_name: v('m-a-group')||null,
   });
   closeModal(); loadApps(); loadGroups();
@@ -458,7 +461,8 @@ async function updateServer(name) {
 async function updateApp(name) {
   await api('PUT', `/apps/${name}`, {
     server_name: v('m-ea-server'), path: v('m-ea-path'),
-    start_command: v('m-ea-start'), build_command: v('m-ea-build')||null,
+    start_command: v('m-ea-start'), stop_command: v('m-ea-stop')||null,
+    build_command: v('m-ea-build')||null,
     deploy_branch: v('m-ea-branch')||'main', group_name: v('m-ea-group')||null,
   });
   closeModal(); loadApps(); loadGroups();
