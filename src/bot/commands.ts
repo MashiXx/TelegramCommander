@@ -926,6 +926,7 @@ export function registerCommands(bot: Telegraf): void {
       return;
     }
     const lines: string[] = [];
+    const buttons: ReturnType<typeof Markup.button.callback>[] = [];
     for (const g of groups) {
       const apps = listAppsByGroup(g);
       const appNames = apps.map((a) => {
@@ -933,8 +934,15 @@ export function registerCommands(bot: Telegraf): void {
         return `  • \`${a.name}\` @ \`${server?.name ?? "?"}\``;
       });
       lines.push(`*${g}* (${apps.length} apps)\n${appNames.join("\n")}`);
+      buttons.push(
+        Markup.button.callback(`🚀 Deploy ${g}`, `deploygrp:${g}`),
+        Markup.button.callback(`🔄 Restart ${g}`, `restartgrp:${g}`),
+      );
     }
-    await replyMd(ctx, lines.join("\n\n"));
+    await ctx.reply(lines.join("\n\n"), {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard(buttons, { columns: 2 }),
+    });
   });
 
   // /setgroup <app> <group>
